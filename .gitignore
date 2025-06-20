@@ -1,17 +1,29 @@
 # Python
 __pycache__/
 *.py[cod]
-*.egg-info/
-*.log
+*.pyo
+*.pyd
+*.so
 
-# Environment
-.venv/
+# Virtual environment
 venv/
 .env
 
-# VSCode
+# VS Code
 .vscode/
 
-# OS
+# macOS 系统文件
 .DS_Store
-Thumbs.db
+
+# 向量库/缓存
+#data/vectorstore/
+*.faiss
+*.pkl
+
+# Logs
+*.log
+
+# 临时文件
+*.swp
+*.tmp
+*.bak
