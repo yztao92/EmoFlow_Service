@@ -1,11 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import List
 from llm.chat import get_chat_response
 from vectorstore.load_vectorstore import load_vectorstore
 
 app = FastAPI()
 
+# 允许跨域请求
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -24,20 +26,37 @@ def startup_event():
     except Exception as e:
         print(f"❌ 向量库加载失败: {e}")
 
+# 根路径返回健康信息
 @app.get("/")
 def read_root():
     return {"message": "EmoFlow 服务运行中"}
 
-class ChatRequest(BaseModel):
-    query: str
+# 定义消息结构
+class Message(BaseModel):
+    role: str  # "user" 或 "assistant"
+    content: str
 
+# 定义聊天请求结构
+class ChatRequest(BaseModel):
+    moodScore: float
+    messages: List[Message]
+
+# 聊天接口
 @app.post("/chat")
 def chat_with_user(request: ChatRequest):
     try:
-        print(f"[请求内容] query = {request.query}")
-        result = get_chat_response(request.query)
+        print(f"[请求内容] moodScore = {request.moodScore}")
+        for msg in request.messages:
+            print(f" - {msg.role}: {msg.content}")
+
+        # 拼接历史消息为 prompt
+        prompt = "\n".join([f"{msg.role}: {msg.content}" for msg in request.messages])
+
+        # 调用大模型
+        result = get_chat_response(prompt)
+
         print(f"[响应内容] result = {result}")
-        return result
+        return {"response": result}
     except Exception as e:
         print(f"[ERROR] 聊天接口处理失败: {e}")
         return {"error": str(e)}
