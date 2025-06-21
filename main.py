@@ -58,5 +58,7 @@ def chat_with_user(request: ChatRequest):
         print(f"[响应内容] result = {result}")
         return {"response": result}
     except Exception as e:
+        import traceback
         print(f"[ERROR] 聊天接口处理失败: {e}")
+        traceback.print_exc()
         return {"error": str(e)}
