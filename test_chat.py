@@ -1,16 +1,22 @@
 import requests
 
-query = "我失眠的时候可以做点什么？"
-
-response = requests.post("http://127.0.0.1:8000/chat", json={"query": query})
+response = requests.post("http://127.0.0.1:8000/chat", json={
+    "moodScore": 5,
+    "messages": [
+        {"role": "user", "content": "我失眠的时候可以做点什么？"}
+    ]
+})
 
 try:
     result = response.json()
     if "response" in result:
-        cleaned = result["response"]
-        # 去除 markdown code 块标记（如 ```plaintext 和 ```）
-        cleaned = cleaned.replace("```plaintext", "").replace("```", "").strip()
-        print("[最终回答]\n", cleaned)
+        response_data = result["response"]
+        if isinstance(response_data, str):
+            # 去除 markdown code 块标记
+            cleaned = response_data.replace("```plaintext", "").replace("```", "").strip()
+            print("[最终回答]\n", cleaned)
+        else:
+            print("[错误响应]", response_data)
     else:
         print("[错误响应]", result)
 except Exception as e:

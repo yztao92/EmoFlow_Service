@@ -2,15 +2,12 @@ import os
 import requests
 from dotenv import load_dotenv
 
-from vectorstore.load_vectorstore import get_retriever
-
 load_dotenv()
 ZHIPU_API_KEY = os.getenv("ZHIPUAI_API_KEY")
 ZHIPU_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
-def zhipu_chat_rag(query: str) -> str:
+def zhipu_chat_rag(query: str, retriever) -> str:
     # 1. 检索相关文档
-    retriever = get_retriever()
     docs = retriever.invoke(query)
     context = "\n\n".join([doc.page_content for doc in docs])
 
@@ -30,8 +27,7 @@ def zhipu_chat_rag(query: str) -> str:
     # 3. 发起对话请求
     headers = {
         "Content-Type": "application/json",
-        "Authorization": f"Bearer {ZHIPU_API_KEY}"
-    }
+        "Authorization": f"Bearer {ZHIPU_API_KEY}"}
     payload = {
         "model": "glm-4",
         "messages": messages

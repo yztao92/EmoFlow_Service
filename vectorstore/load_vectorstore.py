@@ -2,23 +2,28 @@ import os
 from langchain_community.vectorstores import FAISS
 from llm.zhipu_embedding import ZhipuEmbedding
 
-VECTORSTORE_PATH = "data/vectorstore/act"
-vectorstore = None
+VECTORSTORE_BASE_PATH = "./embedding/data/vectorstore"
+vectorstores = {}
 
-def load_vectorstore():
-    global vectorstore
+def load_vectorstores():
+    """加载所有子目录下的向量库"""
     embedding = ZhipuEmbedding()
-    vectorstore = FAISS.load_local(
-        VECTORSTORE_PATH,
-        embedding,
-        allow_dangerous_deserialization=True
-    )
-    print("✅ 向量库加载完成")
+    for folder in os.listdir(VECTORSTORE_BASE_PATH):
+        path = os.path.join(VECTORSTORE_BASE_PATH, folder)
+        if os.path.isdir(path):
+            try:
+                vs = FAISS.load_local(
+                    path, embedding, allow_dangerous_deserialization=True
+                )
+                vectorstores[folder] = vs
+                print(f"✅ 向量库加载完成: {folder}")
+            except Exception as e:
+                print(f"❌ 加载失败: {folder}，原因: {e}")
 
-def get_vectorstore():
-    return vectorstore
+def get_vectorstore(category: str):
+    if category not in vectorstores:
+        raise ValueError(f"❌ 向量库未找到: {category}")
+    return vectorstores[category]
 
-def get_retriever():
-    if vectorstore is None:
-        raise ValueError("❌ 向量库未加载，请先执行 load_vectorstore()")
-    return vectorstore.as_retriever()
+def get_retriever(category: str):
+    return get_vectorstore(category).as_retriever()

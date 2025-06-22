@@ -3,9 +3,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 from llm.chat import get_chat_response
-from vectorstore.load_vectorstore import load_vectorstore
+from vectorstore.load_vectorstore import load_vectorstores, get_retriever
 
 app = FastAPI()
+
+# 启动时加载全部向量库
+load_vectorstores()
 
 # 允许跨域请求
 app.add_middleware(
@@ -15,16 +18,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# 启动时加载向量库
-@app.on_event("startup")
-def startup_event():
-    print("🚀 正在加载知识库...")
-    try:
-        load_vectorstore()
-        print("✅ 向量库加载完成")
-    except Exception as e:
-        print(f"❌ 向量库加载失败: {e}")
 
 # 根路径返回健康信息
 @app.get("/")
@@ -52,8 +45,16 @@ def chat_with_user(request: ChatRequest):
         # 拼接历史消息为 prompt
         prompt = "\n".join([f"{msg.role}: {msg.content}" for msg in request.messages])
 
-        # 调用大模型
-        result = get_chat_response(prompt)
+        # ✅ 根据 moodScore 选择分类
+        mood = request.moodScore
+        if mood < 4:
+            category = "act"
+        else:
+            category = "happiness_trap"
+
+        print(f"[请求内容] query = {prompt}")
+        retriever = get_retriever(category)
+        result = get_chat_response(prompt, retriever)
 
         print(f"[响应内容] result = {result}")
         return {"response": result}
