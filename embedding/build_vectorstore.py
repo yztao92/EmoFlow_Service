@@ -12,7 +12,7 @@ from langchain_community.vectorstores import FAISS
 load_dotenv(find_dotenv())
 
 # 扫描 data 目录下所有 .txt 文件
-data_dir = "../data"
+data_dir = "/root/EmoFlow/data"
 txt_files = [f for f in os.listdir(data_dir) if f.endswith(".txt")]
 
 # 初始化 embedding 模型

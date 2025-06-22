@@ -2,7 +2,7 @@ import os
 from langchain_community.vectorstores import FAISS
 from llm.zhipu_embedding import ZhipuEmbedding
 
-VECTORSTORE_BASE_PATH = "./embedding/data/vectorstore"
+VECTORSTORE_BASE_PATH = "./data/vectorstore"
 vectorstores = {}
 
 def load_vectorstores():
