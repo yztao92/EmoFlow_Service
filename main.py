@@ -1,9 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional, Union, Dict, Any
 from llm.chat import get_chat_response
-from vectorstore.load_vectorstore import load_vectorstores, get_retriever
+from vectorstore.load_vectorstore import load_vectorstores
 
 app = FastAPI()
 
@@ -28,38 +28,49 @@ class Message(BaseModel):
     role: str
     content: str
 
+# 支持两种请求体格式：旧版 moodScore 或 新版 emotions
 class ChatRequest(BaseModel):
-    moodScore: float
+    # 旧版兼容
+    moodScore: Optional[float] = None
+
+    # 新版情绪列表，直接接收前端传来的 ["happy", "sad", ...]
+    emotions: Optional[List[str]] = None
+
     messages: List[Message]
 
 @app.post("/chat")
-def chat_with_user(request: ChatRequest):
+def chat_with_user(request: ChatRequest) -> Dict[str, Any]:
     try:
-        # 🧠 打印情绪分数
-        print(f"\n🧠 [请求情绪分数] moodScore = {request.moodScore}")
+        # 🌟 先打印接收到的原始 JSON，方便调试
+        print("\n🔔 收到请求：", request.json())
 
-        # 🔍 决定知识库分类
-        category = "act" if request.moodScore < 4 else "happiness_trap"
-        print(f"🔍 [使用知识库分类] category = {category}")
+        # 🧠 计算分类 category
+        if request.moodScore is not None:
+            category = "act" if request.moodScore < 4 else "happiness_trap"
+            print(f"🔍 [moodScore 分类] moodScore={request.moodScore} → {category}")
+        elif request.emotions:
+            # 简单示例：如果是"angry"，走 act，否则 happiness_trap
+            if "angry" in request.emotions:
+                category = "act"
+            else:
+                category = "happiness_trap"
+            print(f"🔍 [emotions 分类] emotions={request.emotions} → {category}")
+        else:
+            category = "act"
+            print("🔍 [分类默认] 没有传 moodScore/emotions，默认 act")
 
         # 📨 拼接 Prompt
-        prompt = "\n".join([f"{msg.role}: {msg.content}" for msg in request.messages])
+        prompt = "\n".join(f"{m.role}: {m.content}" for m in request.messages)
         print(f"📨 [拼接 Prompt]\n{prompt}")
 
-        # 🤖 获取 AI 响应
+        # 🤖 调用 AI
         result = get_chat_response(prompt, category)
 
-        # ✅ 输出 answer
+        # ✅ 构造返回
         answer = result.get("answer", "很抱歉，AI 暂时没有给出回应。")
-        print(f"\n🤖 [AI 回答内容]\n{answer}")
-
-        # ✅ 输出引用
         references = result.get("references", [])
-        print(f"\n📚 [引用内容片段]")
-        for i, ref in enumerate(references):
-            print(f" - [{i+1}] {ref}")
 
-        # 返回给前端
+        # 🌟 最终返回格式，FastAPI 会自动转成 JSON
         return {
             "response": {
                 "answer": answer,
@@ -71,6 +82,7 @@ def chat_with_user(request: ChatRequest):
         import traceback
         print(f"[❌ ERROR] 聊天接口处理失败: {e}")
         traceback.print_exc()
+        # 一定返回合法 JSON
         return {
             "response": {
                 "answer": "发生错误，AI 无法完成响应。",
