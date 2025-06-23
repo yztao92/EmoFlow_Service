@@ -19,47 +19,61 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 根路径返回健康信息
 @app.get("/")
 def read_root():
     return {"message": "EmoFlow 服务运行中"}
 
 # 定义消息结构
 class Message(BaseModel):
-    role: str  # "user" 或 "assistant"
+    role: str
     content: str
 
-# 定义聊天请求结构
 class ChatRequest(BaseModel):
     moodScore: float
     messages: List[Message]
 
-# 聊天接口
 @app.post("/chat")
 def chat_with_user(request: ChatRequest):
     try:
-        print(f"[请求内容] moodScore = {request.moodScore}")
-        for msg in request.messages:
-            print(f" - {msg.role}: {msg.content}")
+        # 🧠 打印情绪分数
+        print(f"\n🧠 [请求情绪分数] moodScore = {request.moodScore}")
 
-        # 拼接历史消息为 prompt
+        # 🔍 决定知识库分类
+        category = "act" if request.moodScore < 4 else "happiness_trap"
+        print(f"🔍 [使用知识库分类] category = {category}")
+
+        # 📨 拼接 Prompt
         prompt = "\n".join([f"{msg.role}: {msg.content}" for msg in request.messages])
+        print(f"📨 [拼接 Prompt]\n{prompt}")
 
-        # ✅ 根据 moodScore 选择分类
-        mood = request.moodScore
-        if mood < 4:
-            category = "act"
-        else:
-            category = "happiness_trap"
+        # 🤖 获取 AI 响应
+        result = get_chat_response(prompt, category)
 
-        print(f"[请求内容] query = {prompt}")
-        retriever = get_retriever(category)
-        result = get_chat_response(prompt, retriever)
+        # ✅ 输出 answer
+        answer = result.get("answer", "很抱歉，AI 暂时没有给出回应。")
+        print(f"\n🤖 [AI 回答内容]\n{answer}")
 
-        print(f"[响应内容] result = {result}")
-        return {"response": result}
+        # ✅ 输出引用
+        references = result.get("references", [])
+        print(f"\n📚 [引用内容片段]")
+        for i, ref in enumerate(references):
+            print(f" - [{i+1}] {ref}")
+
+        # 返回给前端
+        return {
+            "response": {
+                "answer": answer,
+                "references": references
+            }
+        }
+
     except Exception as e:
         import traceback
-        print(f"[ERROR] 聊天接口处理失败: {e}")
+        print(f"[❌ ERROR] 聊天接口处理失败: {e}")
         traceback.print_exc()
-        return {"error": str(e)}
+        return {
+            "response": {
+                "answer": "发生错误，AI 无法完成响应。",
+                "references": []
+            }
+        }
