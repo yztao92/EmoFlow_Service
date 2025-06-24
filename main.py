@@ -4,6 +4,8 @@ from pydantic import BaseModel
 from typing import List, Optional, Union, Dict, Any
 from llm.chat import get_chat_response
 from vectorstore.load_vectorstore import load_vectorstores
+from llm.zhipu_llm import zhipu_chat_llm  # 替代 get_chat_response
+
 
 app = FastAPI()
 
@@ -88,4 +90,38 @@ def chat_with_user(request: ChatRequest) -> Dict[str, Any]:
                 "answer": "发生错误，AI 无法完成响应。",
                 "references": []
             }
+        }
+
+
+@app.post("/journal/generate")
+def generate_journal(request: ChatRequest) -> Dict[str, Any]:
+    try:
+        print("\n📝 收到生成心情日记请求：", request.json())
+
+        # 拼接对话内容
+        prompt = "\n".join(f"{m.role}: {m.content}" for m in request.messages)
+
+        # 日记专属提示词
+        system_prompt = (
+            "你是用户的情绪笔记助手，请根据以下对话内容，以“我”的视角，总结一段今天的心情日记。\n"
+            "注意要自然、有情感，不要提到对话或 AI，只写个人的感受和经历：\n"
+            "-----------\n"
+            f"{prompt}\n"
+            "-----------"
+        )
+
+        # 不再调用向量库，直接使用 LLM
+        result = zhipu_chat_llm(system_prompt)
+        journal = result.get("answer", "今天的心情有点复杂，暂时说不清楚。")
+
+        return {
+            "journal": journal
+        }
+
+    except Exception as e:
+        import traceback
+        print(f"[❌ ERROR] 心情日记生成失败: {e}")
+        traceback.print_exc()
+        return {
+            "journal": "生成失败"
         }
