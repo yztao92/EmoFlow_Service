@@ -1,76 +1,64 @@
-import sys
-import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))  # 加入项目根目录
+import os, sys
 
+# 把项目根目录加入到 Python 模块搜索路径
+# 假设你的目录结构是：
+# /root/EmoFlow/
+#   embedding/build_vectorstore.py
+#   llm/zhipu_embedding.py
+root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, root)
+
+from llm.zhipu_embedding import ZhipuEmbedding
+# 后面正常写你的逻辑...
+import json
+from itertools import groupby
 from dotenv import load_dotenv, find_dotenv
-from langchain_community.document_loaders import TextLoader
+
 from langchain.schema import Document
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from llm.zhipu_embedding import ZhipuEmbedding
 
-# 加载 .env 环境变量
+# 加载环境变量（如果你的项目需要）
 load_dotenv(find_dotenv())
 
-# 设置目录
-data_dir = "/root/EmoFlow/data"
-save_base_path = "/root/EmoFlow/data/vectorstore"
-os.makedirs(save_base_path, exist_ok=True)
+# 路径配置
+data_dir     = "/root/EmoFlow/data"
+json_path    = os.path.join(data_dir, "merged_cleaned_conversations.json")
+store_base   = os.path.join(data_dir, "vectorstore_by_emotion")
 
-# 清洗文本函数
-def clean_text(text: str) -> str:
-    skip_keywords = ["目录", "前言", "序言", "致谢", "版权", "附录", "Contents", "Preface", "Prologue"]
-    lines = text.splitlines()
-    cleaned = []
-    skipping = False
+# 确保输出目录存在
+os.makedirs(store_base, exist_ok=True)
 
-    for line in lines:
-        line = line.strip()
-        if not line:  # 去除空行
-            continue
+# 1. 读取合并后的 JSON
+with open(json_path, "r", encoding="utf-8") as f:
+    records = json.load(f)
 
-        # 检测跳过开始
-        if any(kw in line for kw in skip_keywords):
-            skipping = True
-            continue
+# 2. 按 emotion_type 排序并分组
+records.sort(key=lambda r: r["emotion_type"])
+for emo, group in groupby(records, key=lambda r: r["emotion_type"]):
+    docs = []
+    for r in group:
+        # 构建 Document：page_content 为内容，metadata 可以存 topic
+        docs.append(Document(
+            page_content=r["content"],
+            metadata={"topic": r["topic"]}
+        ))
 
-        # 检测跳过结束（遇到正文特征）
-        if skipping and (len(line) > 30 or line.startswith("第") or line[0].isdigit()):
-            skipping = False
-
-        if not skipping:
-            cleaned.append(line)
-
-    return "\n".join(cleaned)
-
-# 初始化 embedding 模型
-embedding = ZhipuEmbedding()
-
-# 处理每个 txt 文件
-txt_files = [f for f in os.listdir(data_dir) if f.endswith(".txt")]
-for filename in txt_files:
-    name = os.path.splitext(filename)[0]
-    file_path = os.path.join(data_dir, filename)
-
-    print(f"📘 正在处理: {filename}")
-
-    # 加载并清洗文本
-    with open(file_path, "r", encoding="utf-8") as f:
-        raw_text = f.read()
-    cleaned_text = clean_text(raw_text)
-    docs = [Document(page_content=cleaned_text)]
-
-    # 切割文本
-    splitter = RecursiveCharacterTextSplitter(chunk_size=500, chunk_overlap=50)
+    # 3. （可选）长文本拆分
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=500,
+        chunk_overlap=50
+    )
     split_docs = splitter.split_documents(docs)
 
-    # 构建向量库
-    vectorstore = FAISS.from_documents(split_docs, embedding)
+    # 4. 嵌入并构建 FAISS 索引
+    embedding = ZhipuEmbedding()
+    vs = FAISS.from_documents(split_docs, embedding)
 
-    # 保存向量库
-    save_path = os.path.join(save_base_path, name)
-    os.makedirs(save_path, exist_ok=True)
-    vectorstore.save_local(save_path)
+    # 5. 保存到对应子目录
+    emo_dir = os.path.join(store_base, emo)
+    os.makedirs(emo_dir, exist_ok=True)
+    vs.save_local(emo_dir)
 
-    print(f"✅ 构建完成: {name}，段数: {len(split_docs)}")
-    print(f"📂 保存路径: {save_path}\n")
+    print(f"✅ 已生成情绪 “{emo}” 的向量库，共 {len(split_docs)} 段，路径：{emo_dir}")
