@@ -1,24 +1,14 @@
+# test_chat_emotion.py
+
 import requests
 
-response = requests.post("http://127.0.0.1:8000/chat", json={
-    "moodScore": 5,
+resp = requests.post("http://127.0.0.1:8000/chat", json={
+    "emotions": ["tired"],   # 直接指定 emotion
     "messages": [
-        {"role": "user", "content": "我失眠的时候可以做点什么？"}
+        {"role": "user", "content": "最近太累了，总睡不够，该怎么办？"}
     ]
 })
 
-try:
-    result = response.json()
-    if "response" in result:
-        response_data = result["response"]
-        if isinstance(response_data, str):
-            # 去除 markdown code 块标记
-            cleaned = response_data.replace("```plaintext", "").replace("```", "").strip()
-            print("[最终回答]\n", cleaned)
-        else:
-            print("[错误响应]", response_data)
-    else:
-        print("[错误响应]", result)
-except Exception as e:
-    print("[解析失败]", e)
-    print("原始响应内容：", response.text)
+print("HTTP 状态：", resp.status_code)
+data = resp.json()
+print("最终回答：", data["response"]["answer"])

@@ -2,9 +2,8 @@ import os
 import requests
 from typing import List
 from dotenv import load_dotenv, find_dotenv
-from langchain.embeddings.base import Embeddings  # 必须继承这个基类
+from langchain_core.embeddings import Embeddings  # 新版 langchain
 
-# 加载环境变量
 _ = load_dotenv(find_dotenv())
 
 class ZhipuEmbedding(Embeddings):
@@ -19,25 +18,26 @@ class ZhipuEmbedding(Embeddings):
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
         }
+        # 支持批量，每次最多 16 条，API 限制
         vectors = []
-        for idx, text in enumerate(texts):
+        BATCH = 16
+        for i in range(0, len(texts), BATCH):
+            batch = texts[i:i+BATCH]
             payload = {
                 "model": "embedding-2",
-                "input": text
+                "input": batch if len(batch) > 1 else batch[0]
             }
             res = requests.post(self.url, headers=headers, json=payload)
-
-            print(f"[调试] 第 {idx + 1} 条文本返回状态码:", res.status_code)
-            print(f"[调试] 第 {idx + 1} 条返回内容:", res.text)
-
             if res.status_code == 200:
                 try:
-                    embedding = res.json()["data"][0]["embedding"]
-                    vectors.append(embedding)
-                except KeyError:
-                    raise ValueError(f"❌ 接口成功但返回格式异常: {res.json()}")
+                    embeddings = res.json()["data"]
+                    # data 是数组，每个元素里有 embedding
+                    vectors.extend([item["embedding"] for item in embeddings])
+                except Exception as e:
+                    raise ValueError(f"接口成功但格式异常: {res.text}")
             else:
-                raise ValueError(f"请求失败: {res.status_code}, {res.text}")
+                print(f"请求失败: {res.status_code} - {res.text}")
+                raise ValueError(f"Zhipu API 请求失败")
         return vectors
 
     def embed_documents(self, texts: List[str]) -> List[List[float]]:
