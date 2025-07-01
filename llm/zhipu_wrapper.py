@@ -1,9 +1,5 @@
-# File: llm/zhipu_wrapper.py
-
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage
-import requests
-import os
+import requests, os
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -18,9 +14,7 @@ class ZhipuLLM(BaseChatModel):
         }
         payload = {
             "model": "glm-4",
-            "messages": [
-                {"role": "user", "content": messages[-1].content}
-            ]
+            "messages": [{"role": "user", "content": messages[-1].content}]
         }
         res = requests.post(url, headers=headers, json=payload)
         res.raise_for_status()

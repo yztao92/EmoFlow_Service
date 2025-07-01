@@ -1,19 +1,29 @@
-# llm/emotion_detector.py
+# File: llm/emotion_detector.py
+
 from transformers import pipeline
 
-# 1）初始化：可换成你自己的模型或服务
-emotion_classifier = pipeline("text-classification", model="uer/roberta-base-finetuned-jd-binary-seq")
+# 初始化多分类情绪识别模型（7 类）
+emotion_classifier = pipeline(
+    "text-classification",
+    model="j-hartmann/emotion-english-distilroberta-base",
+    return_all_scores=False
+)
 
-# 2）对外接口
+# 原始标签到五类映射
+LABEL_MAP = {
+    "joy":      "happy",
+    "sadness":  "sad",
+    "anger":    "angry",
+    "disgust":  "angry",
+    "fear":     "sad",     # 将恐惧/害怕归为悲伤
+    "surprise": "neutral",
+    "neutral":  "neutral"
+}
+
 def detect_emotion(text: str) -> str:
     """
-    返回一个情绪标签，如 'happy', 'sad', 'angry', 'tired'。
+    多分类情绪分析，返回 'happy','sad','angry','neutral' 五类。
     """
-    result = emotion_classifier(text)
-    label = result[0]['label']
-    # TODO: 将 label 映射到你的四个情绪
-    mapping = {
-        'LABEL_0': 'sad',
-        'LABEL_1': 'happy',
-    }
-    return mapping.get(label, 'happy')
+    result = emotion_classifier(text)[0]
+    orig = result["label"].lower()
+    return LABEL_MAP.get(orig, "neutral")

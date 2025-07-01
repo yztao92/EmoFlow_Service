@@ -2,14 +2,16 @@
 import os
 import requests
 from dotenv import load_dotenv
-from vectorstore.load_vectorstore import get_retriever
+from vectorstore.load_vectorstore import get_retriever_by_emotion
 
 load_dotenv()
 ZHIPU_API_KEY = os.getenv("ZHIPUAI_API_KEY")
 ZHIPU_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 
 def zhipu_chat_rag(query: str, category: str = "default") -> dict:
-    retriever = get_retriever(category)
+    # round_index 如果从外层传入，可按需调整 K
+    k = 3
+    retriever = get_retriever_by_emotion(category, k=k)  
     docs = retriever.invoke(query)
 
     # ✅ 只保留纯文本内容
