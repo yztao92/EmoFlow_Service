@@ -9,3 +9,6 @@ faiss-cpu
 transformers
 numpy
 pydantic
+torch
+torchvision
+torchaudio

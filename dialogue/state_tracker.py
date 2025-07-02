@@ -52,15 +52,20 @@ class StateTracker:
     def summary(self, last_n: int = 3) -> str:
         """
         用于 Prompt 注入：输出最近对话历史和当前状态。
-        包含最近 last_n 轮（每轮含用户+AI）对话简要，
-        再附加当前情绪、技术栈和用户价值观。
+        如果轮次不超过10轮，全部传入；否则只传最近last_n轮。
         """
-        # 构建历史文本
         lines: List[str] = []
-        # 取最近 last_n 轮，即 2 * last_n 条消息
-        for role, content in self.history[-2 * last_n:]:
-            speaker = "用户" if role == "user" else "AI"
-            lines.append(f"• {speaker}: {content}")
+        total_rounds = len(self.history) // 2
+        if total_rounds <= 10:
+            # 全量传入
+            for role, content in self.history:
+                speaker = "用户" if role == "user" else "AI"
+                lines.append(f"• {speaker}: {content}")
+        else:
+            # 只传最近last_n轮
+            for role, content in self.history[-2 * last_n:]:
+                speaker = "用户" if role == "user" else "AI"
+                lines.append(f"• {speaker}: {content}")
         # 状态信息
         lines.append(f"当前情绪：{self.state['current_emotion']}")
         techs = self.state["technique_stack"][-last_n:]

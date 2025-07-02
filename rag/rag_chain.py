@@ -6,6 +6,11 @@ from llm.deepseek_wrapper import DeepSeekLLM
 from llm.zhipu_embedding import ZhipuEmbedding
 from langchain_core.messages import HumanMessage
 import numpy as np
+import logging
+
+logging.basicConfig(level=logging.INFO)
+
+logger = logging.getLogger(__name__)
 
 # 实例化嵌入模型，用于相似度计算
 _embedding = ZhipuEmbedding()
@@ -48,7 +53,7 @@ def run_rag_chain(
 
     # 1) 初步检索
     retriever = get_retriever_by_emotion(emotion, k=k)
-    docs = retriever.get_relevant_documents(query)
+    docs = retriever.invoke(query)
 
     # 2) 计算相似度
     q_vec = np.array(_embedding.embed_query(query))
@@ -59,10 +64,10 @@ def run_rag_chain(
     sims = (d_vecs @ q_vec) / (d_norms * q_norm)
 
     # 3) 打印检索日志
-    print(f"\n🧠 [检索] 情绪={emotion}, k={k}，检索到：")
+    logging.info(f"\n🧠 [检索] 情绪={emotion}, k={k}，检索到：")
     for i, (doc, sim) in enumerate(zip(docs, sims), 1):
         snippet = doc.page_content.replace("\n", " ")[:200]
-        print(f"—— 文档段 {i} （情绪={doc.metadata.get('emotion')}，相似度 {sim*100:.1f}%）—— {snippet}…")
+        logging.info(f"—— 文档段 {i} （情绪={doc.metadata.get('emotion')}，相似度 {sim*100:.1f}%）—— {snippet}…")
 
     # 4) 构造 Prompt，注入对话状态摘要
     context = "\n\n".join(doc.page_content for doc in docs)
@@ -76,11 +81,11 @@ def run_rag_chain(
     )
 
     # 5) 打印实际使用的 Prompt
-    print("\n💡 [使用 Prompt]---------------------------------------------------")
-    print(prompt)
-    print("💡 [End Prompt]---------------------------------------------------\n")
+    logging.info("\n💡 [使用 Prompt]---------------------------------------------------")
+    logging.info(prompt)
+    logging.info("💡 [End Prompt]---------------------------------------------------\n")
 
     # 6) 调用 LLM
     res = chat_with_llm(prompt)
-    answer = res.get("answer", "").strip().strip('"').strip('“').strip('”')
+    answer = res.get("answer", "").strip().strip('"').strip('"').strip('"')
     return answer

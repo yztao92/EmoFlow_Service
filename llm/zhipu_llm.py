@@ -1,4 +1,4 @@
-# llm/zhipu_llm.py
+# llm/zhipu_llm.py - 智谱AI LLM 调用封装
 
 import os
 import requests
