@@ -18,6 +18,8 @@ def get_retriever_by_emotion(emotion: str, k: int = 3):
     """
     global _vs
     if _vs is None:
+        if not os.path.exists(VECTORSTORE_BASE):
+            raise ValueError(f"向量库路径不存在: {VECTORSTORE_BASE}")
         _vs = FAISS.load_local(
             VECTORSTORE_BASE,
             _embedding,

@@ -66,6 +66,7 @@ def run_rag_chain(
 
     # 4) 构造 Prompt，注入对话状态摘要
     context = "\n\n".join(doc.page_content for doc in docs)
+    
     prompt = RAG_PROMPT.format(
         emotion=emotion,
         round_index=round_index,

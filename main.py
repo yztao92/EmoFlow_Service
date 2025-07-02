@@ -1,7 +1,7 @@
 # File: main.py
 
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -10,6 +10,12 @@ from rag.rag_chain import run_rag_chain
 from llm.zhipu_llm import zhipu_chat_llm
 from llm.emotion_detector import detect_emotion
 from dialogue.state_tracker import StateTracker
+
+# 验证必需的环境变量
+required_env_vars = ["ZHIPUAI_API_KEY", "DEEPSEEK_API_KEY"]
+missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+if missing_vars:
+    raise ValueError(f"缺少必需的环境变量: {', '.join(missing_vars)}")
 
 # 会话状态存储：key 用 session_id
 session_states: Dict[str, StateTracker] = {}
@@ -38,8 +44,6 @@ class Message(BaseModel):
 
 class ChatRequest(BaseModel):
     session_id: str                     # 唯一会话 ID
-    moodScore: Optional[float] = None
-    emotions: Optional[List[str]] = None
     messages: List[Message]
 
 
@@ -91,13 +95,16 @@ def chat_with_user(request: ChatRequest) -> Dict[str, Any]:
             }
         }
 
+    except ValueError as e:
+        print(f"[❌ ERROR] 参数错误: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         import traceback
         print(f"[❌ ERROR] 聊天接口处理失败: {e}")
         traceback.print_exc()
         return {
             "response": {
-                "answer": "发生错误，AI 无法完成响应。",
+                "answer": "抱歉，系统暂时无法处理您的请求，请稍后再试。",
                 "references": []
             }
         }

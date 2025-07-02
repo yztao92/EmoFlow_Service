@@ -6,7 +6,7 @@ from transformers import pipeline
 emotion_classifier = pipeline(
     "text-classification",
     model="j-hartmann/emotion-english-distilroberta-base",
-    return_all_scores=False
+    top_k=1
 )
 
 # 原始标签到五类映射
@@ -24,6 +24,10 @@ def detect_emotion(text: str) -> str:
     """
     多分类情绪分析，返回 'happy','sad','angry','neutral' 五类。
     """
-    result = emotion_classifier(text)[0]
-    orig = result["label"].lower()
-    return LABEL_MAP.get(orig, "neutral")
+    results = emotion_classifier(text)  # top_k=1 返回嵌套列表
+    if results and len(results) > 0 and len(results[0]) > 0:
+        result = results[0][0]  # 取第一个结果中的第一个元素
+        orig = result["label"].lower()
+        return LABEL_MAP.get(orig, "neutral")
+    else:
+        return "neutral"  # 默认返回中性情绪

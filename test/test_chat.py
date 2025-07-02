@@ -3,7 +3,7 @@
 import requests
 
 resp = requests.post("http://127.0.0.1:8000/chat", json={
-    "emotions": ["tired"],   # 直接指定 emotion
+    "session_id": "test_session_001",
     "messages": [
         {"role": "user", "content": "最近太累了，总睡不够，该怎么办？"}
     ]
