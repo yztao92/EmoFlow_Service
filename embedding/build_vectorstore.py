@@ -11,12 +11,12 @@ from llm.zhipu_embedding import ZhipuEmbedding
 load_dotenv(find_dotenv())
 
 # 配置路径
-input_path = "data_merged.jsonl"
+input_path = "merged_data.jsonl"
 output_dir = "vectorstore_by_summary"
 os.makedirs(output_dir, exist_ok=True)
 
 records = []
-with open("data_merged.jsonl", "r", encoding="utf-8") as f:
+with open("merged_data.jsonl", "r", encoding="utf-8") as f:
     for idx, line in enumerate(f, 1):
         line = line.strip()
         if not line:
