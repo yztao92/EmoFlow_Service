@@ -70,7 +70,11 @@ def run_rag_chain(
         logging.info(f"—— 文档段 {i} （情绪={doc.metadata.get('emotion')}，相似度 {sim*100:.1f}%）—— {snippet}…")
 
     # 4) 构造 Prompt，注入对话状态摘要
-    context = "\n\n".join(doc.page_content for doc in docs)
+    # context 现在包含 summary 和原文 content
+    context = "\n\n".join(
+        f"摘要: {doc.page_content}\n原文: {doc.metadata.get('content', '')}"
+        for doc in docs
+    )
     
     prompt = RAG_PROMPT.format(
         emotion=emotion,
