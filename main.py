@@ -62,13 +62,11 @@ class ChatRequest(BaseModel):
 def chat_with_user(request: ChatRequest) -> Dict[str, Any]:
     logging.info("收到 /chat 请求")  # 只要有请求 hit 到 /chat，这行日志一定会输出
     try:
-        # 1) 获取或初始化对话状态
         logging.info(f"\n🔔 收到请求：{request.json()}")
         state = session_states.setdefault(request.session_id, StateTracker())
 
-        # 2) 记录所有历史消息到 state.history
-        for m in request.messages:
-            state.update_message(m.role, m.content)
+        # 直接用前端传来的消息覆盖历史，避免重复
+        state.history = [(m.role, m.content) for m in request.messages]
 
         # 3) 获取最新一条用户提问
         user_query = request.messages[-1].content

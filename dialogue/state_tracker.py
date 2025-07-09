@@ -1,6 +1,6 @@
 # File: dialogue/state_tracker.py
 
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, Callable, Optional
 
 class StateTracker:
     def __init__(self):
@@ -74,3 +74,34 @@ class StateTracker:
         lines.append(f"用户价值观：{vals}")
         # 添加统一头标识
         return "【对话历史及状态】\n" + "\n".join(lines)
+
+    def generate_brief_summary(
+        self,
+        llm: Optional[Callable[[str], str]] = None,
+        last_n: int = 3
+    ) -> str:
+        """
+        用 LLM 生成一句“主线摘要”，用于RAG检索。
+        llm: 接收prompt字符串并返回回答的可调用对象（如 call_llm_api）
+        last_n: 最近n轮对话（user+AI为一轮）
+        """
+        # 只取最近 last_n 轮（即最近 2*last_n 条）
+        history_slice = self.history[-2 * last_n:]
+        history_text = "\n".join([f"{'用户' if r == 'user' else 'AI'}: {c}" for r, c in history_slice])
+        prompt = (
+            "你是对话摘要助手。请根据以下多轮对话，"
+            "用一句自然语言准确概括此刻用户的主要困扰或需求：\n"
+            f"{history_text}\n"
+            "输出示例：用户最近睡眠浅，经常夜醒，想听睡前放松的方法。"
+        )
+        if llm is not None:
+            try:
+                result = llm(prompt).strip()
+                # 防止空返回
+                if result:
+                    return result
+            except Exception as e:
+                print(f"[StateTracker] LLM摘要失败: {e}")
+        # 如果没给llm或llm失败，则兜底：直接拼接最近用户消息
+        fallback = "，".join([c for r, c in history_slice if r == "user"])
+        return fallback if fallback else (self.history[-1][1] if self.history else "")
