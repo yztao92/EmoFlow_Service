@@ -86,12 +86,17 @@ def chat_with_user(request: ChatRequest) -> Dict[str, Any]:
         context_summary = state.summary(last_n=3)
         logging.info(f"📝 [状态摘要]\n{context_summary}")
 
+        # brief_summary = state.generate_brief_summary(llm=zhipu_chat_llm)
+        # logging.info(f"📌 [简要摘要 brief_summary] {brief_summary}")
+        
+
         # 7) 调用 RAG Chain，并把状态摘要传进去，生成 AI 回复
         answer = run_rag_chain(
             emotion=emotion,
             query=user_query,
             round_index=round_index,
             state_summary=context_summary
+            # brief_summary=brief_summary
         )
 
         # 8) 记录 AI 回复到历史中
