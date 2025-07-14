@@ -13,7 +13,7 @@ embedding_model = get_embedding_model()
 
 # ✅ 指向向量库目录（可通过 .env 配置）
 VECTORSTORE_BASE = os.getenv(
-    "VECTORSTORE_BASE", "embedding/vectorstore_by_summary_m3"
+    "VECTORSTORE_BASE", "/root/EmoFlow/embedding/vectorstore_by_summary_small_zh"
 )
 
 _vs = None

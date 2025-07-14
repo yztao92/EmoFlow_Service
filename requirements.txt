@@ -12,3 +12,4 @@ pydantic
 torch
 torchvision
 torchaudio
+sentence-transformers

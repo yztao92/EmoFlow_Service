@@ -1,8 +1,8 @@
-from langchain_huggingface import HuggingFaceEmbeddings
+from langchain.embeddings import HuggingFaceEmbeddings
 
 # ✅ 替换为你本地 fake123456 的实际绝对路径
 embedding_model = HuggingFaceEmbeddings(
-    model_name="/Users/yangzhentao/.cache/huggingface/hub/models--BAAI--bge-m3/snapshots/fake123456",
+    model_name="/root/EmoFlow/models/bge-m3/fake123456",
     model_kwargs={"device": "cpu"},  # 或 "cuda" 如支持
     encode_kwargs={"normalize_embeddings": True}
 )

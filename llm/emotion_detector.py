@@ -1,72 +1,50 @@
-# File: llm/emotion_detector.py
-
-from transformers import pipeline
 import re
 
-# 初始化多分类情绪识别模型（7 类）
-emotion_classifier = pipeline(
-    "text-classification",
-    model="j-hartmann/emotion-english-distilroberta-base",
-    top_k=1
-)
-
-# 原始标签到五类映射
-LABEL_MAP = {
-    "joy":      "happy",
-    "sadness":  "sad",
-    "anger":    "angry",
-    "disgust":  "angry",
-    "fear":     "sad",     # 将恐惧/害怕归为悲伤
-    "surprise": "neutral",
-    "neutral":  "neutral"
-}
-
-# 中文情绪关键词检测
-CHINESE_EMOTION_KEYWORDS = {
-    "angry": ["生气", "愤怒", "恼火", "烦躁", "暴躁", "火大", "气死", "气人", "讨厌", "烦死了"],
-    "sad": ["难过", "伤心", "悲伤", "痛苦", "沮丧", "失落", "绝望", "想哭", "心情不好", "郁闷"],
-    "happy": ["开心", "高兴", "快乐", "兴奋", "愉快", "心情好", "棒", "爽", "舒服", "满意"],
-    "tired": ["累", "疲惫", "困", "想睡觉", "没精神", "乏力", "倦怠", "想休息"]
-}
-
-def detect_emotion_chinese(text: str) -> str:
+# 示例 LLM 情绪判断接口函数（需你接入真实模型/服务）
+def llm_emotion_api(msg: str) -> str:
     """
-    基于中文关键词的情绪检测
+    调用大模型 API 判断情绪，仅返回 happy/sad/angry/tired/neutral 之一。
+    这里是示意函数，你需接入实际 LLM 识别接口。
     """
-    text_lower = text.lower()
-    
-    # 统计每种情绪的关键词出现次数
-    emotion_scores = {}
-    for emotion, keywords in CHINESE_EMOTION_KEYWORDS.items():
-        score = sum(1 for keyword in keywords if keyword in text_lower)
-        if score > 0:
-            emotion_scores[emotion] = score
-    
-    # 返回得分最高的情绪
-    if emotion_scores:
-        return max(emotion_scores.items(), key=lambda x: x[1])[0]
-    
-    return None
+    # 示例返回
+    return "neutral"
 
-def detect_emotion(text: str) -> str:
+
+def detect_emotion(msg: str) -> str:
     """
-    多分类情绪分析，返回 'happy','sad','angry','neutral','tired' 五类。
-    优先使用中文关键词检测，如果检测不到则使用英文模型。
+    根据规则或 LLM 检测用户输入情绪。
+    优先使用关键词规则，规则无法命中则使用 LLM fallback。
     """
-    # 1. 首先尝试中文关键词检测
-    chinese_emotion = detect_emotion_chinese(text)
-    if chinese_emotion:
-        return chinese_emotion
+    msg = msg.strip().lower()
+
+    happy_keywords = r"开心|高兴|爽|放假|赚到了|升职|中奖|顺利|早下班|轻松|如愿|愉快|得劲|躺赢|美滋滋|幸福|解放|自由|美好|满意|哈哈+|笑死|放松|心情好|喜悦|甜|舒服|满意|顺心|值得|有趣|喜欢|真香"
+    sad_keywords = r"难过|失落|伤心|心碎|沮丧|低落|绝望|想哭|崩溃|无助|被动|失望|郁闷|遗憾|痛苦|麻了|烦闷|愁|心情差|迷茫|不开心|凄凉|烦恼|孤独|抑郁|无力|想放弃|伤感|没希望|眼泪|苦"
+    angry_keywords = r"气死|生气|愤怒|火大|暴躁|崩溃|烦人|受够了|不爽|怒|忍不了|真无语|骂人|爆炸|烦死|疯了|什么玩意|操|服了|受气|欺负|挑衅|讨厌|狗东西|不讲理|怒火|发火|恼火|翻脸|吐槽|脾气|怒气|不耐烦"
+    tired_keywords = r"累|疲惫|搞不动|没力气|困|压力大|倦|撑不住|不想动|太难了|躺平|没精神|撑不下去|快倒了|乏|身心俱疲|筋疲力尽|虚脱|提不起劲|没状态|想睡|耗尽|无力|打不起精神|死气沉沉|拖延|没活力|不行了|懒得|倦怠|麻木|烦闷"
     
-    # 2. 如果中文检测不到，使用英文模型
-    try:
-        results = emotion_classifier(text)  # top_k=1 返回嵌套列表
-        if results and len(results) > 0 and len(results[0]) > 0:
-            result = results[0][0]  # 取第一个结果中的第一个元素
-            orig = result["label"].lower()
-            return LABEL_MAP.get(orig, "neutral")
-        else:
-            return "neutral"  # 默认返回中性情绪
-    except Exception as e:
-        print(f"情绪检测模型调用失败: {e}")
-        return "neutral"
+    if re.search(happy_keywords, msg):
+        return "happy"
+    elif re.search(sad_keywords, msg):
+        return "sad"
+    elif re.search(angry_keywords, msg):
+        return "angry"
+    elif re.search(tired_keywords, msg):
+        return "tired"
+
+    # fallback to LLM
+    return llm_emotion_api(msg)
+
+
+# Prompt 路由器，根据情绪分配对应的 prompt 类型
+def route_prompt_by_emotion(emotion: str) -> str:
+    """
+    根据情绪返回对应的风格 prompt key
+    """
+    if emotion in ["happy", "neutral"]:
+        return "light_expand"
+    elif emotion in ["tired"]:
+        return "cheer_and_push"
+    elif emotion in ["sad", "angry"]:
+        return "co_regret"
+    else:
+        return "default"

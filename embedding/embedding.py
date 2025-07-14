@@ -7,14 +7,14 @@ import torch
 from dotenv import load_dotenv, find_dotenv
 from langchain.schema import Document
 from langchain_community.vectorstores import FAISS
-from langchain_huggingface import HuggingFaceEmbeddings  # ✅ 推荐用这个
+from langchain_community.embeddings import HuggingFaceEmbeddings  # ✅ 推荐新版路径
 
 # 加载环境变量
 load_dotenv(find_dotenv())
 
 # 配置路径
 input_path = "merged_data.jsonl"
-output_dir = "vectorstore_by_summary_m3"
+output_dir = "embedding/vectorstore_by_summary_small_zh"
 os.makedirs(output_dir, exist_ok=True)
 
 # 加载数据
@@ -48,10 +48,10 @@ for r in records:
         }
     ))
 
-# ✅ 使用本地 bge-m3 模型作为 embedding
+# ✅ 使用 BAAI/bge-small-zh 模型作为 embedding
 embedding_model = HuggingFaceEmbeddings(
-    model_name=os.path.expanduser("~/.cache/huggingface/hub/models--BAAI--bge-m3"),
-    model_kwargs={"device": "cuda" if torch.cuda.is_available() else "cpu"},
+    model_name="BAAI/bge-small-zh",
+    model_kwargs={"device": "cpu"},
     encode_kwargs={"normalize_embeddings": True}
 )
 
