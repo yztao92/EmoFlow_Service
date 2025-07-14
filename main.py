@@ -52,7 +52,6 @@ if missing_vars:
 
 # FastAPI 初始化
 app = FastAPI()
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], allow_credentials=True,
@@ -135,7 +134,7 @@ class ChatRequest(BaseModel):
     messages: List[Message]
 
 @app.post("/chat")
-def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
+def chat_with_user(request: ChatRequest) -> Dict[str, Any]:
     logging.info("收到 /chat 请求")
     try:
         logging.info(f"\n🔔 收到请求：{request.json()}")
@@ -180,7 +179,7 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
         }
 
 @app.post("/journal/generate")
-def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
+def generate_journal(request: ChatRequest) -> Dict[str, Any]:
     try:
         logging.info(f"\n📝 收到生成心情日记请求：{request.json()}")
         prompt = "\n".join(f"{m.role}: {m.content}" for m in request.messages)
