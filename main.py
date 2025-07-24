@@ -3,6 +3,7 @@
 import os
 import logging
 import requests
+import json
 from fastapi import FastAPI, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -258,10 +259,19 @@ def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_us
         # 保存日记到数据库
         db: Session = SessionLocal()
         try:
+            # 将 messages 转换为 JSON 字符串存储，增加容错处理
+            try:
+                messages_json = json.dumps([{"role": m.role, "content": m.content} for m in request.messages], ensure_ascii=False)
+            except Exception as json_error:
+                logging.warning(f"⚠️ 消息格式转换失败，使用原始格式: {json_error}")
+                # 如果转换失败，尝试直接使用原始数据
+                messages_json = json.dumps([{"role": getattr(m, 'role', 'unknown'), "content": getattr(m, 'content', str(m))} for m in request.messages], ensure_ascii=False)
+            
             journal_entry = Journal(
                 user_id=user_id,
                 title=title,
                 content=journal,
+                messages=messages_json,  # 存储对话历史
                 session_id=request.session_id
             )
             db.add(journal_entry)
@@ -303,10 +313,19 @@ def get_user_journals(user_id: int = Depends(get_current_user), limit: int = 20,
         
         journal_list = []
         for journal in journals:
+            # 解析 messages JSON 字符串
+            messages = []
+            if journal.messages:
+                try:
+                    messages = json.loads(journal.messages)
+                except json.JSONDecodeError:
+                    messages = []
+            
             journal_list.append({
                 "id": journal.id,
                 "title": journal.title,
                 "content": journal.content,
+                "messages": messages,  # 返回对话历史
                 "session_id": journal.session_id,
                 "created_at": journal.created_at.isoformat() if journal.created_at else None,
                 "updated_at": journal.updated_at.isoformat() if journal.updated_at else None
@@ -348,10 +367,19 @@ def get_journal_detail(journal_id: int, user_id: int = Depends(get_current_user)
             db.close()
             raise HTTPException(status_code=404, detail="日记不存在")
         
+        # 解析 messages JSON 字符串
+        messages = []
+        if journal.messages:
+            try:
+                messages = json.loads(journal.messages)
+            except json.JSONDecodeError:
+                messages = []
+        
         journal_data = {
             "id": journal.id,
             "title": journal.title,
             "content": journal.content,
+            "messages": messages,  # 返回对话历史
             "session_id": journal.session_id,
             "created_at": journal.created_at.isoformat() if journal.created_at else None,
             "updated_at": journal.updated_at.isoformat() if journal.updated_at else None
