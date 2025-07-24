@@ -31,3 +31,6 @@ venv/
 *.bak
 
 /models/*
+
+# 数据库文件
+database/*.db

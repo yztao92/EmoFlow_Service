@@ -13,10 +13,10 @@ from jose.utils import base64url_decode
 from datetime import datetime, timedelta
 
 from rag.rag_chain import run_rag_chain
-from llm.zhipu_llm import zhipu_chat_llm
+from llm.deepseek_wrapper import DeepSeekLLM
 from llm.emotion_detector import detect_emotion
 from dialogue.state_tracker import StateTracker
-from models import init_db, SessionLocal, User
+from models import init_db, SessionLocal, User, Journal
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -41,10 +41,23 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger(__name__)
 
 # 检查必要环境变量
-required_env_vars = ["ZHIPUAI_API_KEY", "DEEPSEEK_API_KEY"]
+required_env_vars = ["DEEPSEEK_API_KEY"]
 missing_vars = [var for var in required_env_vars if not os.getenv(var)]
 if missing_vars:
     raise ValueError(f"缺少必需的环境变量: {', '.join(missing_vars)}")
+
+# 初始化 DeepSeek LLM
+_deepseek_llm = DeepSeekLLM()
+
+def deepseek_chat_llm(prompt: str) -> dict:
+    """使用 DeepSeek 生成回复"""
+    try:
+        from langchain_core.messages import HumanMessage
+        response_text = _deepseek_llm._call([HumanMessage(content=prompt)])
+        return {"answer": response_text}
+    except Exception as e:
+        logging.error(f"[❌ ERROR] DeepSeek LLM 调用失败: {e}")
+        return {"answer": "生成失败"}
 
 # FastAPI 初始化
 app = FastAPI()
@@ -74,11 +87,23 @@ def read_root():
 
 class AppleLoginRequest(BaseModel):
     identity_token: str
+    full_name: Optional[str] = None
+    email: Optional[str] = None
 
 @app.post("/auth/apple")
 def login_with_apple(req: AppleLoginRequest):
     try:
-        token = req.identity_token
+        logging.info(f"🔍 收到 Apple 登录请求: identity_token长度={len(req.identity_token)}, full_name='{req.full_name}', email='{req.email}'")
+        # 处理 Base64 编码的令牌
+        import base64
+        try:
+            # 尝试解码 Base64
+            token_bytes = base64.b64decode(req.identity_token)
+            token = token_bytes.decode('utf-8')
+        except:
+            # 如果不是 Base64，直接使用原始字符串
+            token = req.identity_token
+            
         unverified_header = jwt.get_unverified_header(token)
         kid = unverified_header["kid"]
         key_data = next((k for k in apple_keys if k["kid"] == kid), None)
@@ -101,15 +126,30 @@ def login_with_apple(req: AppleLoginRequest):
         )
 
         apple_user_id = decoded["sub"]
-        email = decoded.get("email")
+        # 优先使用前端发送的邮箱，如果没有则使用令牌中的邮箱
+        email = req.email or decoded.get("email")
+        # 获取用户姓名
+        name = req.full_name
 
         db: Session = SessionLocal()
         user = db.query(User).filter(User.apple_user_id == apple_user_id).first()
         if not user:
-            user = User(apple_user_id=apple_user_id, email=email)
+            user = User(apple_user_id=apple_user_id, email=email, name=name)
             db.add(user)
             db.commit()
             db.refresh(user)
+        else:
+            # 如果是现有用户，更新信息（如果前端提供了新的信息）
+            updated = False
+            if req.email and req.email != user.email:
+                user.email = req.email
+                updated = True
+            if req.full_name and req.full_name != user.name:
+                user.name = req.full_name
+                updated = True
+            if updated:
+                db.commit()
+                db.refresh(user)
 
         token_data = {
             "sub": str(user.id),
@@ -122,7 +162,8 @@ def login_with_apple(req: AppleLoginRequest):
             "status": "ok",
             "token": token,
             "user_id": user.id,
-            "email": user.email
+            "email": user.email,
+            "name": user.name or f"用户{user.id}"  # 如果没有姓名，使用默认用户名
         }
 
     except Exception as e:
@@ -192,17 +233,168 @@ def chat_with_user(request: ChatRequest) -> Dict[str, Any]:
         }
 
 @app.post("/journal/generate")
-def generate_journal(request: ChatRequest) -> Dict[str, Any]:
+def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
     try:
-        logging.info(f"\n📝 收到生成心情日记请求：{request.json()}")
+        logging.info(f"\n📝 收到生成心情日记请求：用户ID={user_id}, 请求={request.json()}")
         prompt = "\n".join(f"{m.role}: {m.content}" for m in request.messages)
-        system_prompt = f"""你是用户的情绪笔记助手，请根据以下对话内容，以"我"的视角，总结一段今天的心情日记。\n注意要自然、有情感，不要提到对话或 AI，只写个人的感受和经历：\n-----------\n{prompt}\n-----------"""
-
-        result = zhipu_chat_llm(system_prompt)
-        journal = result.get("answer", "今天的心情有点复杂，暂时说不清楚。")
-
-        return {"journal": journal}
+        
+        # 生成日记内容
+        journal_system_prompt = f"""你是用户的情绪笔记助手，请根据以下对话内容，以"我"的视角，总结一段今天的心情日记。\n注意要自然、有情感，不要提到对话或 AI，只写个人的感受和经历：\n-----------\n{prompt}\n-----------"""
+        
+        journal_result = deepseek_chat_llm(journal_system_prompt)
+        journal = journal_result.get("answer", "今天的心情有点复杂，暂时说不清楚。")
+        
+        # 生成日记标题
+        title_system_prompt = f"""请根据以下心情日记内容，生成一个简洁、有情感、不超过10个字的标题。标题要体现日记的主要情感和主题：\n-----------\n{journal}\n-----------"""
+        
+        title_result = deepseek_chat_llm(title_system_prompt)
+        title = title_result.get("answer", "今日心情")
+        
+        # 清理标题，确保简洁
+        title = title.strip().replace('"', '').replace('"', '')
+        if len(title) > 10:
+            title = title[:10] + "..."
+        
+        # 保存日记到数据库
+        db: Session = SessionLocal()
+        try:
+            journal_entry = Journal(
+                user_id=user_id,
+                title=title,
+                content=journal,
+                session_id=request.session_id
+            )
+            db.add(journal_entry)
+            db.commit()
+            db.refresh(journal_entry)
+            logging.info(f"✅ 日记已保存到数据库，ID: {journal_entry.id}")
+        except Exception as db_error:
+            logging.error(f"❌ 保存日记到数据库失败: {db_error}")
+            db.rollback()
+        finally:
+            db.close()
+        
+        return {
+            "journal": journal,
+            "title": title,
+            "journal_id": journal_entry.id if 'journal_entry' in locals() else None,
+            "status": "success"
+        }
 
     except Exception as e:
         logging.error(f"[❌ ERROR] 心情日记生成失败: {e}")
-        return {"journal": "生成失败"}
+        return {
+            "journal": "生成失败",
+            "title": "今日心情",
+            "journal_id": None,
+            "status": "error"
+        }
+
+@app.get("/journal/list")
+def get_user_journals(user_id: int = Depends(get_current_user), limit: int = 20, offset: int = 0) -> Dict[str, Any]:
+    """获取用户的日记列表"""
+    try:
+        db: Session = SessionLocal()
+        journals = db.query(Journal).filter(
+            Journal.user_id == user_id
+        ).order_by(
+            Journal.created_at.desc()
+        ).offset(offset).limit(limit).all()
+        
+        journal_list = []
+        for journal in journals:
+            journal_list.append({
+                "id": journal.id,
+                "title": journal.title,
+                "content": journal.content,
+                "session_id": journal.session_id,
+                "created_at": journal.created_at.isoformat() if journal.created_at else None,
+                "updated_at": journal.updated_at.isoformat() if journal.updated_at else None
+            })
+        
+        # 获取总数
+        total_count = db.query(Journal).filter(Journal.user_id == user_id).count()
+        
+        db.close()
+        
+        return {
+            "status": "success",
+            "journals": journal_list,
+            "total": total_count,
+            "limit": limit,
+            "offset": offset
+        }
+        
+    except Exception as e:
+        logging.error(f"[❌ ERROR] 获取用户日记列表失败: {e}")
+        return {
+            "status": "error",
+            "journals": [],
+            "total": 0,
+            "message": "获取日记列表失败"
+        }
+
+@app.get("/journal/{journal_id}")
+def get_journal_detail(journal_id: int, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
+    """获取特定日记的详细信息"""
+    try:
+        db: Session = SessionLocal()
+        journal = db.query(Journal).filter(
+            Journal.id == journal_id,
+            Journal.user_id == user_id
+        ).first()
+        
+        if not journal:
+            db.close()
+            raise HTTPException(status_code=404, detail="日记不存在")
+        
+        journal_data = {
+            "id": journal.id,
+            "title": journal.title,
+            "content": journal.content,
+            "session_id": journal.session_id,
+            "created_at": journal.created_at.isoformat() if journal.created_at else None,
+            "updated_at": journal.updated_at.isoformat() if journal.updated_at else None
+        }
+        
+        db.close()
+        
+        return {
+            "status": "success",
+            "journal": journal_data
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[❌ ERROR] 获取日记详情失败: {e}")
+        raise HTTPException(status_code=500, detail="获取日记详情失败")
+
+@app.delete("/journal/{journal_id}")
+def delete_journal(journal_id: int, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
+    """删除用户的日记"""
+    try:
+        db: Session = SessionLocal()
+        journal = db.query(Journal).filter(
+            Journal.id == journal_id,
+            Journal.user_id == user_id
+        ).first()
+        
+        if not journal:
+            db.close()
+            raise HTTPException(status_code=404, detail="日记不存在")
+        
+        db.delete(journal)
+        db.commit()
+        db.close()
+        
+        return {
+            "status": "success",
+            "message": "日记删除成功"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[❌ ERROR] 删除日记失败: {e}")
+        raise HTTPException(status_code=500, detail="删除日记失败")
