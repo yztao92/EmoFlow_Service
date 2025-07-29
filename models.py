@@ -31,6 +31,7 @@ class Journal(Base):
     content = Column(Text, nullable=False)
     messages = Column(Text, nullable=True)  # 存储对话历史
     session_id = Column(String, nullable=True)  # 关联的对话会话ID
+    emotion = Column(String, nullable=True)  # 新增：情绪字段
     created_at = Column(DateTime, default=lambda: datetime.now(timezone(timedelta(hours=8))))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone(timedelta(hours=8))), onupdate=lambda: datetime.now(timezone(timedelta(hours=8))))
     

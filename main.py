@@ -187,6 +187,7 @@ class Message(BaseModel):
 class ChatRequest(BaseModel):
     session_id: str
     messages: List[Message]
+    emotion: Optional[str] = None  # 新增：情绪字段
 
 @app.post("/chat")
 def chat_with_user(request: ChatRequest) -> Dict[str, Any]:
@@ -272,7 +273,8 @@ def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_us
                 title=title,
                 content=journal,
                 messages=messages_json,  # 存储对话历史
-                session_id=request.session_id
+                session_id=request.session_id,
+                emotion=request.emotion  # 新增：保存情绪字段
             )
             db.add(journal_entry)
             db.commit()
@@ -288,6 +290,7 @@ def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_us
             "journal": journal,
             "title": title,
             "journal_id": journal_entry.id if 'journal_entry' in locals() else None,
+            "emotion": request.emotion,  # 新增：返回情绪字段
             "status": "success"
         }
 
@@ -297,6 +300,7 @@ def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_us
             "journal": "生成失败",
             "title": "今日心情",
             "journal_id": None,
+            "emotion": request.emotion if hasattr(request, 'emotion') else None,  # 新增：返回情绪字段
             "status": "error"
         }
 
