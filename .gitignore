@@ -34,3 +34,6 @@ venv/
 
 # 数据库文件
 database/*.db
+
+# 数据集文件夹
+dataset/
