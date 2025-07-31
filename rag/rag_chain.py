@@ -1,50 +1,64 @@
 # File: rag/rag_chain.py
-# 功能：RAG (Retrieval-Augmented Generation) 检索增强生成的核心实现
-# 包含：情绪检测、知识检索、Prompt路由、LLM调用等完整流程
+# 功能：RAG检索增强生成的核心逻辑
+# 实现：用户查询 → 向量检索 → 知识融合 → LLM生成回复
 
-from rag.prompt_router import route_prompt_by_emotion  # 根据情绪路由到不同风格的Prompt
-from llm.emotion_detector import detect_emotion  # 情绪检测模块
-from rag.prompts import PROMPT_MAP  # 不同风格的Prompt模板映射
-from vectorstore.load_vectorstore import get_retriever_by_emotion  # 根据情绪获取向量检索器
-from llm.deepseek_wrapper import DeepSeekLLM  # DeepSeek LLM包装器
-from llm.embedding_factory import get_embedding_model  # 获取embedding模型
-from langchain_core.messages import HumanMessage  # LangChain消息格式
-import numpy as np  # 数值计算库，用于相似度计算
-import logging  # 日志记录
-import re  # 正则表达式，用于文本清理
-import time  # 时间模块，用于性能监控
+import logging
+import time
+import numpy as np
+import re
+from typing import Dict, Any
 
-# 配置日志
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# 导入千问向量库系统
+from vectorstore.qwen_vectorstore import get_qwen_vectorstore, set_qwen_embedding_model
+from llm.qwen_embedding_factory import get_qwen_embedding_model
+from rag.prompt_router import route_prompt_by_emotion
+from rag.prompts import PROMPT_MAP
+from llm.llm_factory import chat_with_llm
 
-# 初始化全局模型实例
-embedding_model = get_embedding_model()  # 获取embedding模型实例
-_deepseek = DeepSeekLLM()  # 初始化DeepSeek LLM实例
+# 延迟初始化千问向量库和embedding模型
+_qwen_vectorstore = None
+_qwen_embedding_model = None
+
+def get_qwen_vectorstore():
+    """获取千问向量库实例（延迟初始化）"""
+    global _qwen_vectorstore
+    if _qwen_vectorstore is None:
+        from vectorstore.qwen_vectorstore import get_qwen_vectorstore as _get_qwen_vectorstore
+        _qwen_vectorstore = _get_qwen_vectorstore()
+        # 确保embedding模型被设置到向量库
+        embedding_model = get_qwen_embedding_model()
+        from vectorstore.qwen_vectorstore import set_qwen_embedding_model
+        set_qwen_embedding_model(embedding_model)
+    return _qwen_vectorstore
+
+def get_qwen_embedding_model():
+    """获取千问embedding模型实例（延迟初始化）"""
+    global _qwen_embedding_model
+    if _qwen_embedding_model is None:
+        from llm.qwen_embedding_factory import get_qwen_embedding_model as _get_qwen_embedding_model
+        _qwen_embedding_model = _get_qwen_embedding_model()
+    return _qwen_embedding_model
 
 def chat_with_llm(prompt: str) -> dict:
     """
-    调用DeepSeek LLM生成回复
+    调用LLM生成回复
     
     参数：
-        prompt (str): 输入给LLM的完整提示词
-        参数来源：run_rag_chain函数中构造的Prompt
+        prompt (str): 完整的提示词
     
     返回：
-        dict: 包含LLM回复的字典，格式 {"answer": "生成的回复"}
+        dict: 包含answer字段的响应字典
     """
-    response_text = _deepseek._call([
-        HumanMessage(role="user", content=prompt)  # 构造LangChain消息格式
-    ])
-    return {"answer": response_text}
+    # 这里调用你的LLM工厂函数
+    from llm.llm_factory import chat_with_llm as llm_chat
+    return llm_chat(prompt)
 
 def clean_answer(text: str) -> str:
     """
-    清理LLM回复中的多余引号和格式
+    清理LLM回复文本
     
     参数：
-        text (str): 原始LLM回复文本
-        参数来源：chat_with_llm函数返回的原始回复
+        text (str): 原始回复文本
     
     返回：
         str: 清理后的回复文本
@@ -59,6 +73,7 @@ def run_rag_chain(
     query: str,
     round_index: int,
     state_summary: str,
+    emotion: str = "neutral",  # 保留emotion参数用于Prompt路由
 ) -> str:
     """
     RAG 主逻辑：完整的检索增强生成流程
@@ -70,66 +85,70 @@ def run_rag_chain(
         参数来源：main.py中计算的用户发言轮次
         state_summary (str): 对话状态摘要
         参数来源：StateTracker.summary()方法生成
+        emotion (str): 用户情绪状态（仅用于Prompt路由）
+        参数来源：前端传入的情绪信息
     
     返回：
         str: AI生成的回复文本
     
     流程：
-        1. 自动情绪识别 + Prompt路由
-        2. 根据情绪检索相关知识
+        1. Prompt路由（基于情绪）
+        2. 千问向量检索（纯相似度）
         3. 构造完整Prompt并调用LLM
         4. 清理和返回回复
     """
-    # ==================== 1. 情绪识别和Prompt路由 ====================
-    # 自动识别用户输入的情绪
-    emotion = detect_emotion(query)
-    # 根据情绪选择对应的Prompt风格
+    # ==================== 1. Prompt路由 ====================
+    # 使用传入的情绪参数进行Prompt路由
     prompt_key = route_prompt_by_emotion(emotion)
-    # 从Prompt映射中获取对应的模板
     prompt_template = PROMPT_MAP.get(prompt_key, PROMPT_MAP["default"])
-    logging.info(f"[Prompt 路由] 使用 prompt_key: {prompt_key}")  # 记录使用的Prompt风格
+    logging.info(f"[Prompt 路由] 使用 prompt_key: {prompt_key}")
 
-    # ==================== 2. 知识检索 ====================
+    # ==================== 2. 千问向量检索 ====================
     # 根据对话轮次决定检索数量：第一轮检索更多内容，后续轮次减少
     k = 5 if round_index == 1 else 3
-    # 根据情绪获取对应的检索器（包含情绪过滤）
-    retriever = get_retriever_by_emotion(emotion, k=k)
-
-    # 执行检索并记录耗时
+    
+    # 执行千问向量检索（纯相似度检索，无情绪过滤）
     start_time = time.time()
-    docs = retriever.invoke(query)  # 使用LangChain的invoke方法进行检索
+    search_results = get_qwen_vectorstore().search(query, k=k)
     retrieve_duration = time.time() - start_time
-    logging.info(f"⏱️ [检索耗时] {retrieve_duration:.2f} 秒")
+    logging.info(f"⏱️ [千问检索耗时] {retrieve_duration:.2f} 秒")
 
-    # ==================== 3. 相似度计算和日志记录 ====================
-    # 计算查询向量
-    q_vec = np.array(embedding_model.embed_query(query))
-    q_norm = np.linalg.norm(q_vec) + 1e-8  # 计算查询向量范数，加小值避免除零
-    
-    # 计算文档向量
-    doc_texts = [d.page_content for d in docs]  # 提取文档内容
-    d_vecs = np.array(embedding_model.embed_documents(doc_texts))  # 批量计算文档向量
-    d_norms = np.linalg.norm(d_vecs, axis=1) + 1e-8  # 计算文档向量范数
-    
-    # 计算余弦相似度
-    sims = (d_vecs @ q_vec) / (d_norms * q_norm)
+    # ==================== 3. 检索结果处理和日志记录 ====================
+    if not search_results:
+        logging.warning("⚠️ 未检索到相关文档")
+        # 如果没有检索到结果，使用默认回复
+        context = "抱歉，我没有找到相关的知识来回答您的问题。"
+    else:
+        # 记录检索结果
+        logging.info(f"\n🧠 [千问检索] 情绪={emotion}, prompt={prompt_key}, k={k}")
+        for i, result in enumerate(search_results, 1):
+            similarity = result.get('similarity', 0)
+            title = result.get('title', '未知标题')
+            logging.info(f"—— 文档 {i} （相似度 {similarity*100:.1f}%）—— {title[:50]}…")
 
-    # 记录检索结果和相似度
-    logging.info(f"\n🧠 [检索] 情绪={emotion}, prompt={prompt_key}, k={k}")
-    for i, (doc, sim) in enumerate(zip(docs, sims), 1):
-        snippet = doc.page_content.replace("\n", " ")[:200]  # 截取文档片段用于日志
-        logging.info(f"—— 文档段 {i} （情绪={doc.metadata.get('emotion')}，相似度 {sim*100:.1f}%）—— {snippet}…")
+        # ==================== 4. 构造上下文和Prompt ====================
+        # 将检索到的文档构造为上下文
+        context_parts = []
+        for result in search_results:
+            answer_summary = result.get('answer_summary', '')
+            key_point = result.get('key_point', '')
+            suggestion = result.get('suggestion', '')
+            
+            # 组合文档信息
+            doc_info = f"摘要: {answer_summary}"
+            if key_point:
+                doc_info += f"\n关键点: {key_point}"
+            if suggestion:
+                doc_info += f"\n建议: {suggestion}"
+            
+            context_parts.append(doc_info)
+        
+        context = "\n\n".join(context_parts)
 
-    # ==================== 4. 构造上下文和Prompt ====================
-    # 将检索到的文档构造为上下文，包含摘要和原文
-    context = "\n\n".join(
-        f"摘要: {doc.page_content}\n原文: {doc.metadata.get('content', '')[:300]}"  # 限制原文长度
-        for doc in docs
-    )
-
+    # ==================== 5. 构造完整Prompt ====================
     # 使用Prompt模板格式化完整提示词
     prompt = prompt_template.format(
-        emotion=emotion,  # 当前情绪
+        emotion=emotion,  # 当前情绪（用于Prompt风格）
         round_index=round_index,  # 对话轮次
         state_summary=state_summary,  # 状态摘要
         context=context,  # 检索到的知识上下文
@@ -141,7 +160,7 @@ def run_rag_chain(
     logging.info(prompt)
     logging.info("💡 [End Prompt]---------------------------------------------------\n")
 
-    # ==================== 5. LLM调用和回复清理 ====================
+    # ==================== 6. LLM调用和回复清理 ====================
     # 调用LLM生成回复
     res = chat_with_llm(prompt)
     raw_answer = res.get("answer", "").strip()  # 获取原始回复

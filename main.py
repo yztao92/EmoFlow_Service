@@ -17,10 +17,8 @@ from datetime import datetime, timedelta
 
 # 导入项目内部模块
 from rag.rag_chain import run_rag_chain  # RAG 聊天链，用于生成AI回复
-from llm.deepseek_wrapper import DeepSeekLLM  # DeepSeek LLM 包装器
-from llm.emotion_detector import detect_emotion  # 情绪检测模块
 from dialogue.state_tracker import StateTracker  # 对话状态跟踪器
-from models import init_db, SessionLocal, User, Journal  # 数据库模型
+from database_models import init_db, SessionLocal, User, Journal  # 数据库模型
 
 from dotenv import load_dotenv
 load_dotenv()  # 加载 .env 环境变量文件
@@ -49,30 +47,14 @@ logger = logging.getLogger(__name__)
 
 # ==================== 环境变量检查 ====================
 # 检查必需的环境变量是否已配置
-required_env_vars = ["DEEPSEEK_API_KEY"]  # 必需的API密钥列表
+required_env_vars = ["QIANWEN_API_KEY"]  # 必需的API密钥列表
 missing_vars = [var for var in required_env_vars if not os.getenv(var)]  # 找出缺失的环境变量
 if missing_vars:
     raise ValueError(f"缺少必需的环境变量: {', '.join(missing_vars)}")  # 如果缺少必需变量则抛出异常
 
 # ==================== LLM 初始化 ====================
-# 初始化 DeepSeek LLM 实例，用于生成AI回复
-_deepseek_llm = DeepSeekLLM()
-
-def deepseek_chat_llm(prompt: str) -> dict:
-    """
-    使用 DeepSeek LLM 生成回复
-    参数：
-        prompt (str): 输入给LLM的提示词
-    返回：
-        dict: 包含生成回复的字典，格式 {"answer": "生成的回复"}
-    """
-    try:
-        from langchain_core.messages import HumanMessage
-        response_text = _deepseek_llm._call([HumanMessage(content=prompt)])  # 调用DeepSeek API
-        return {"answer": response_text}
-    except Exception as e:
-        logging.error(f"[❌ ERROR] DeepSeek LLM 调用失败: {e}")  # 记录错误日志
-        return {"answer": "生成失败"}  # 返回错误提示
+# 现在主要使用千问LLM，DeepSeek作为备用
+# 注意：DeepSeek LLM 实例在需要时通过 llm_factory 获取
 
 # ==================== FastAPI 应用初始化 ====================
 # 创建 FastAPI 应用实例
@@ -290,10 +272,10 @@ def chat_with_user(request: ChatRequest) -> Dict[str, Any]:
         user_query = request.messages[-1].content
         logging.info(f"📨 [用户提问] {user_query}")
 
-        # 情绪检测：分析用户输入的情绪
-        emotion = detect_emotion(user_query)
+        # 使用前端传入的情绪，如果没有则默认为 neutral
+        emotion = request.emotion or "neutral"
         state.update_emotion(emotion)
-        logging.info(f"🔍 [emotion] 检测到情绪 → {emotion}")
+        logging.info(f"🔍 [emotion] 使用前端情绪 → {emotion}")
 
         # 计算对话轮次
         user_messages = [m for m in request.messages if m.role == "user"]
@@ -308,7 +290,8 @@ def chat_with_user(request: ChatRequest) -> Dict[str, Any]:
         answer = run_rag_chain(
             query=user_query,  # 用户查询
             round_index=round_index,  # 对话轮次
-            state_summary=context_summary  # 状态摘要
+            state_summary=context_summary,  # 状态摘要
+            emotion=emotion  # 前端传入的情绪
         )
 
         # 更新AI回复到对话历史
@@ -355,15 +338,16 @@ def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_us
         # 生成日记内容的系统提示词
         journal_system_prompt = f"""你是用户的情绪笔记助手，请根据以下对话内容，以"我"的视角，总结一段今天的心情日记。\n注意要自然、有情感，不要提到对话或 AI，只写个人的感受和经历：\n-----------\n{prompt}\n-----------"""
         
-        # 调用LLM生成日记内容
-        journal_result = deepseek_chat_llm(journal_system_prompt)
+        # 调用千问LLM生成日记内容
+        from llm.llm_factory import chat_with_qwen_llm
+        journal_result = chat_with_qwen_llm(journal_system_prompt)
         journal = journal_result.get("answer", "今天的心情有点复杂，暂时说不清楚。")
         
         # 生成日记标题的系统提示词
         title_system_prompt = f"""请根据以下心情日记内容，生成一个简洁、有情感、不超过10个字的标题。标题要体现日记的主要情感和主题：\n-----------\n{journal}\n-----------"""
         
-        # 调用LLM生成日记标题
-        title_result = deepseek_chat_llm(title_system_prompt)
+        # 调用千问LLM生成日记标题
+        title_result = chat_with_qwen_llm(title_system_prompt)
         title = title_result.get("answer", "今日心情")
         
         # 清理标题，确保简洁
@@ -463,6 +447,7 @@ def get_user_journals(user_id: int = Depends(get_current_user), limit: int = 20,
                 "content": journal.content,
                 "messages": messages,  # 返回对话历史
                 "session_id": journal.session_id,
+                "emotion": journal.emotion,  # 返回情绪信息
                 "created_at": journal.created_at.isoformat() if journal.created_at else None,
                 "updated_at": journal.updated_at.isoformat() if journal.updated_at else None
             })
@@ -530,6 +515,7 @@ def get_journal_detail(journal_id: int, user_id: int = Depends(get_current_user)
             "content": journal.content,
             "messages": messages,  # 返回对话历史
             "session_id": journal.session_id,
+            "emotion": journal.emotion,  # 返回情绪信息
             "created_at": journal.created_at.isoformat() if journal.created_at else None,
             "updated_at": journal.updated_at.isoformat() if journal.updated_at else None
         }

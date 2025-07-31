@@ -2,16 +2,14 @@
 # 功能：根据用户情绪自动路由到不同风格的Prompt模板
 # 实现：基于情绪类型选择最适合的对话风格
 
-from llm.emotion_detector import detect_emotion  # 导入情绪检测函数
-
 def route_prompt_by_emotion(emotion: str) -> str:
     """
     根据情绪返回对应的风格 prompt key
     
     参数：
-        emotion (str): 检测到的情绪类型
-        参数来源：llm.emotion_detector.detect_emotion() 函数返回的情绪标签
-        可能的值：happy, sad, angry, tired, neutral
+        emotion (str): 前端传入的情绪类型
+        参数来源：前端传入的情绪值
+        可能的值：happy, angry, sad, unhappy, peaceful, happiness
     
     返回：
         str: 对应的Prompt风格key
@@ -22,16 +20,16 @@ def route_prompt_by_emotion(emotion: str) -> str:
         - "default": 兜底风格，用于未识别情绪或日常泛用场景
     
     路由逻辑：
-        - happy/neutral → light_expand (轻松扩展)
-        - tired → cheer_and_push (鼓励推动)
-        - sad/angry → co_regret (共情安慰)
+        - happy/happiness/peaceful → light_expand (轻松扩展)
+        - angry/sad/unhappy → co_regret (共情安慰)
         - 其他情况 → default (兜底)
     """
-    if emotion in ["happy", "neutral"]:
-        return "light_expand"  # 开心和中性情绪使用轻松扩展风格
-    elif emotion == "tired":
-        return "cheer_and_push"  # 疲惫情绪使用鼓励推动风格
-    elif emotion in ["sad", "angry"]:
-        return "co_regret"  # 悲伤和愤怒情绪使用共情安慰风格
+    # 正向情绪：使用轻松扩展风格
+    if emotion in ["happy", "happiness", "peaceful"]:
+        return "light_expand"
+    # 负面情绪：使用共情安慰风格
+    elif emotion in ["angry", "sad", "unhappy"]:
+        return "co_regret"
+    # 其他情况：使用兜底风格
     else:
-        return "default"  # 其他情况使用兜底风格
+        return "default"

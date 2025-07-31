@@ -33,6 +33,7 @@ venv/
 /models/*
 
 # 数据库文件
+database/
 database/*.db
 
 # 数据集文件夹
