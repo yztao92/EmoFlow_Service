@@ -199,7 +199,7 @@ def login_with_apple(req: AppleLoginRequest):
             "token": token,  # 返回JWT令牌给客户端
             "user_id": user.id,
             "email": user.email,
-            "name": user.name or f"用户{user.id}"  # 如果没有姓名，使用默认用户名
+            "name": user.name  # 直接返回用户名，可能为None
         }
 
     except Exception as e:
@@ -227,6 +227,108 @@ def get_current_user(token: str = Header(...)) -> int:
     except Exception:
         raise HTTPException(status_code=401, detail="无效或过期的 Token")
 
+# ==================== 用户资料管理模块 ====================
+
+class UpdateProfileRequest(BaseModel):
+    """
+    更新用户资料请求的数据模型
+    参数来源：客户端发送的用户资料更新请求
+    """
+    name: Optional[str] = None  # 用户姓名（可选）
+    email: Optional[str] = None  # 用户邮箱（可选）
+
+@app.put("/user/profile")
+def update_user_profile(request: UpdateProfileRequest, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
+    """
+    更新用户资料接口
+    功能：允许用户修改自己的姓名和邮箱
+    
+    参数：
+        request (UpdateProfileRequest): 包含要更新的用户信息
+        user_id (int): 当前登录用户ID（从JWT token获取）
+    
+    返回：
+        dict: 包含更新后的用户信息
+    """
+    try:
+        logging.info(f"🔧 收到用户资料更新请求: user_id={user_id}, name='{request.name}', email='{request.email}'")
+        
+        # 数据库操作：更新用户信息
+        db: Session = SessionLocal()
+        user = db.query(User).filter(User.id == user_id).first()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        
+        # 更新用户信息
+        updated = False
+        if request.name is not None and request.name != user.name:
+            user.name = request.name
+            updated = True
+            logging.info(f"📝 更新用户名: {user.name} -> {request.name}")
+        
+        if request.email is not None and request.email != user.email:
+            user.email = request.email
+            updated = True
+            logging.info(f"📧 更新用户邮箱: {user.email} -> {request.email}")
+        
+        # 如果有更新，提交到数据库
+        if updated:
+            db.commit()
+            db.refresh(user)
+            logging.info(f"✅ 用户资料更新成功: user_id={user_id}")
+        
+        return {
+            "status": "ok",
+            "message": "用户资料更新成功" if updated else "用户资料无变化",
+            "user": {
+                "id": user.id,
+                "name": user.name,
+                "email": user.email
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"❌ 用户资料更新失败: {e}")
+        raise HTTPException(status_code=500, detail="用户资料更新失败")
+
+@app.get("/user/profile")
+def get_user_profile(user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
+    """
+    获取用户资料接口
+    功能：获取当前登录用户的资料信息
+    
+    参数：
+        user_id (int): 当前登录用户ID（从JWT token获取）
+    
+    返回：
+        dict: 包含用户资料信息
+    """
+    try:
+        # 数据库操作：获取用户信息
+        db: Session = SessionLocal()
+        user = db.query(User).filter(User.id == user_id).first()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        
+        return {
+            "status": "ok",
+            "user": {
+                "id": user.id,
+                "name": user.name,
+                "email": user.email
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"❌ 获取用户资料失败: {e}")
+        raise HTTPException(status_code=500, detail="获取用户资料失败")
+
 # ==================== 聊天模块 ====================
 
 class Message(BaseModel):
@@ -245,6 +347,24 @@ class ChatRequest(BaseModel):
     session_id: str  # 会话ID，用于标识对话会话
     messages: List[Message]  # 消息列表，包含完整的对话历史
     emotion: Optional[str] = None  # 情绪字段（可选），客户端可提供情绪信息
+
+class ManualJournalRequest(BaseModel):
+    """
+    手动创建日记请求的数据模型
+    参数来源：客户端发送的手动创建日记请求
+    """
+    title: str  # 日记标题
+    content: str  # 日记内容
+    emotion: Optional[str] = None  # 情绪字段（可选），客户端可提供情绪信息
+
+class UpdateJournalRequest(BaseModel):
+    """
+    更新日记请求的数据模型
+    参数来源：客户端发送的更新日记请求
+    """
+    title: Optional[str] = None  # 日记标题（可选）
+    content: Optional[str] = None  # 日记内容（可选）
+    emotion: Optional[str] = None  # 情绪字段（可选）
 
 @app.post("/chat")
 def chat_with_user(request: ChatRequest) -> Dict[str, Any]:
@@ -268,13 +388,14 @@ def chat_with_user(request: ChatRequest) -> Dict[str, Any]:
         # 更新对话历史（直接覆盖，避免重复）
         state.history = [(m.role, m.content) for m in request.messages]
         
-        # 提取用户最新输入
-        user_query = request.messages[-1].content
+        # 提取用户最近3条消息合并作为查询
+        user_messages = [m for m in request.messages if m.role == "user"]
+        recent_queries = [m.content for m in user_messages[-3:]]
+        user_query = " ".join(recent_queries)
         logging.info(f"📨 [用户提问] {user_query}")
 
         # 使用前端传入的情绪，如果没有则默认为 neutral
         emotion = request.emotion or "neutral"
-        state.update_emotion(emotion)
         logging.info(f"🔍 [emotion] 使用前端情绪 → {emotion}")
 
         # 计算对话轮次
@@ -283,7 +404,7 @@ def chat_with_user(request: ChatRequest) -> Dict[str, Any]:
         logging.info(f"🔁 [轮次] 用户发言轮次：{round_index}")
 
         # 生成对话状态摘要
-        context_summary = state.summary(last_n=3)
+        context_summary = state.summary(last_n=10)
         logging.info(f"📝 [状态摘要]\n{context_summary}")
 
         # 调用RAG链生成AI回复
@@ -335,16 +456,108 @@ def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_us
         # 将对话历史转换为文本格式
         prompt = "\n".join(f"{m.role}: {m.content}" for m in request.messages)
         
-        # 生成日记内容的系统提示词
-        journal_system_prompt = f"""你是用户的情绪笔记助手，请根据以下对话内容，以"我"的视角，总结一段今天的心情日记。\n注意要自然、有情感，不要提到对话或 AI，只写个人的感受和经历：\n-----------\n{prompt}\n-----------"""
+        # 生成日记内容的系统提示词（纯文本格式）
+        journal_system_prompt = f"""你是用户的情绪笔记助手，请根据以下对话内容，以"我"的视角，总结一段今天的心情日记。
+注意要自然、有情感，不要提到对话或 AI，只写个人的感受和经历。
+请用纯文本格式输出，不要包含任何HTML标签：\n-----------\n{prompt}\n-----------"""
         
-        # 调用千问LLM生成日记内容
+        # 调用千问LLM生成日记内容（纯文本）
         from llm.llm_factory import chat_with_qwen_llm
         journal_result = chat_with_qwen_llm(journal_system_prompt)
-        journal = journal_result.get("answer", "今天的心情有点复杂，暂时说不清楚。")
+        journal_text = journal_result.get("answer", "今天的心情有点复杂，暂时说不清楚。")
+        
+        # 后端智能转换纯文本为HTML
+        def text_to_smart_html(text):
+            """智能转换纯文本为HTML"""
+            # 按段落分割（双换行）
+            paragraphs = text.split('\n\n')
+            
+            html_parts = []
+            for p in paragraphs:
+                p = p.strip()
+                if p:
+                    # 处理包含列表项的段落
+                    lines = p.split('\n')
+                    if any(line.strip().startswith(('•', '-', '*')) for line in lines):
+                        # 这是一个包含列表项的段落
+                        for line in lines:
+                            line = line.strip()
+                            if line:
+                                if line.startswith(('•', '-', '*')):
+                                    html_parts.append(f"<li>{line[1:].strip()}</li>")
+                                else:
+                                    html_parts.append(f"<p>{line}</p>")
+                    # 处理标题（以数字开头或包含"："的行）
+                    elif p.startswith(('1.', '2.', '3.', '4.', '5.')) or '：' in p[:10]:
+                        html_parts.append(f"<h3>{p}</h3>")
+                    # 普通段落
+                    else:
+                        html_parts.append(f"<p>{p}</p>")
+            
+            # 构建完整的HTML文档
+            body_content = '\n'.join(html_parts)
+            complete_html = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            font-size: 20px;
+            font-weight: 300; /* light 粗细 */
+            line-height: 1.6;
+            margin: 0;
+            padding: 0;
+            text-align: center; /* 默认居中对齐 */
+        }}
+        
+        /* 支持不同对齐方式的段落 */
+        .text-left {{
+            text-align: left;
+        }}
+        
+        .text-center {{
+            text-align: center;
+        }}
+        
+        .text-right {{
+            text-align: right;
+        }}
+        
+        /* 支持粗体 */
+        strong, b {{
+            font-weight: 600;
+        }}
+        
+        /* 支持斜体 */
+        em, i {{
+            font-style: italic;
+        }}
+        
+        /* 段落间距 */
+        p {{
+            margin: 0;
+            padding: 0;
+        }}
+        
+        /* 换行处理 */
+        br {{
+            line-height: 1.6;
+        }}
+    </style>
+</head>
+<body>
+    {body_content}
+</body>
+</html>'''
+            
+            return complete_html
+        
+        # 转换纯文本为HTML
+        journal_html = text_to_smart_html(journal_text)
         
         # 生成日记标题的系统提示词
-        title_system_prompt = f"""请根据以下心情日记内容，生成一个简洁、有情感、不超过10个字的标题。标题要体现日记的主要情感和主题：\n-----------\n{journal}\n-----------"""
+        title_system_prompt = f"""请根据以下心情日记内容，生成一个简洁、有情感、不超过10个字的标题。标题要体现日记的主要情感和主题：\n-----------\n{journal_text}\n-----------"""
         
         # 调用千问LLM生成日记标题
         title_result = chat_with_qwen_llm(title_system_prompt)
@@ -366,11 +579,21 @@ def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_us
                 # 如果转换失败，尝试直接使用原始数据
                 messages_json = json.dumps([{"role": getattr(m, 'role', 'unknown'), "content": getattr(m, 'content', str(m))} for m in request.messages], ensure_ascii=False)
             
+            # 使用新的HTML处理工具
+            from utils.html_processor import process_journal_content
+            
+            # 处理HTML内容
+            processed_content = process_journal_content(journal_html)
+            
             # 创建日记记录
             journal_entry = Journal(
                 user_id=user_id,  # 用户ID
                 title=title,  # 日记标题
-                content=journal,  # 日记内容
+                content=journal_text,  # 原始纯文本内容（向后兼容）
+                content_html=processed_content['content_html'],  # 修复后的HTML内容
+                content_plain=processed_content['content_plain'],  # 纯文本内容
+                content_format=processed_content['content_format'],  # 内容格式
+                is_safe=processed_content['is_safe'],  # 安全标识
                 messages=messages_json,  # 存储对话历史
                 session_id=request.session_id,  # 关联的会话ID
                 emotion=request.emotion  # 情绪信息
@@ -386,7 +609,11 @@ def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_us
             db.close()
         
         return {
-            "journal": journal,  # 生成的日记内容
+            "journal": journal_text,  # 生成的日记内容（原始纯文本）
+            "content_html": processed_content['content_html'],  # 修复后的HTML内容
+            "content_plain": processed_content['content_plain'],  # 纯文本内容
+            "content_format": processed_content['content_format'],  # 内容格式
+            "is_safe": processed_content['is_safe'],  # 安全标识
             "title": title,  # 生成的日记标题
             "journal_id": journal_entry.id if 'journal_entry' in locals() else None,  # 日记ID
             "emotion": request.emotion,  # 情绪信息
@@ -399,6 +626,89 @@ def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_us
             "journal": "生成失败",
             "title": "今日心情",
             "journal_id": None,
+            "emotion": request.emotion if hasattr(request, 'emotion') else None,
+            "status": "error"
+        }
+
+# ==================== 手动创建日记模块 ====================
+
+@app.post("/journal/create")
+def create_manual_journal(request: ManualJournalRequest, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
+    """
+    手动创建日记接口：用户直接输入日记内容
+    
+    参数：
+        request (ManualJournalRequest): 包含日记标题和内容的请求对象
+        参数来源：客户端发送的手动创建日记请求
+        user_id (int): 当前用户ID，通过JWT令牌自动获取
+        参数来源：get_current_user 函数从JWT令牌中提取
+    
+    返回：
+        Dict[str, Any]: 包含创建的日记信息和元数据的响应
+    """
+    try:
+        logging.info(f"\n📝 收到手动创建日记请求：用户ID={user_id}, 标题={request.title}")
+        
+        # 清理标题，确保简洁
+        title = request.title.strip().replace('"', '').replace('"', '')
+        if len(title) > 50:  # 手动创建的标题可以稍长一些
+            title = title[:50] + "..."
+        
+        # 使用新的HTML处理工具
+        from utils.html_processor import process_journal_content
+        
+        # 处理HTML内容
+        processed_content = process_journal_content(request.content)
+        
+        # 保存日记到数据库
+        db: Session = SessionLocal()
+        try:
+            # 创建日记记录
+            journal_entry = Journal(
+                user_id=user_id,  # 用户ID
+                title=title,  # 用户输入的标题
+                content=processed_content['content'],  # 原始内容（向后兼容）
+                content_html=processed_content['content_html'],  # 修复后的HTML内容
+                content_plain=processed_content['content_plain'],  # 纯文本内容
+                content_format=processed_content['content_format'],  # 内容格式
+                is_safe=processed_content['is_safe'],  # 安全标识
+                messages="[]",  # 手动创建没有对话历史
+                session_id="manual",  # 标记为手动创建
+                emotion=request.emotion  # 情绪信息
+            )
+            db.add(journal_entry)
+            db.commit()
+            db.refresh(journal_entry)
+            logging.info(f"✅ 手动日记已保存到数据库，ID: {journal_entry.id}")
+        except Exception as db_error:
+            logging.error(f"❌ 保存手动日记到数据库失败: {db_error}")
+            db.rollback()
+            raise
+        finally:
+            db.close()
+        
+        return {
+            "journal_id": journal_entry.id,  # 日记ID
+            "title": title,  # 日记标题
+            "content": processed_content['content'],  # 原始内容（向后兼容）
+            "content_html": processed_content['content_html'],  # 修复后的HTML内容
+            "content_plain": processed_content['content_plain'],  # 纯文本内容
+            "content_format": processed_content['content_format'],  # 内容格式
+            "is_safe": processed_content['is_safe'],  # 安全标识
+            "emotion": request.emotion,  # 情绪信息
+            "status": "success"
+        }
+
+    except Exception as e:
+        logging.error(f"[❌ ERROR] 手动日记创建失败: {e}")
+        return {
+            "journal_id": None,
+            "title": request.title if hasattr(request, 'title') else "",
+            "content": request.content if hasattr(request, 'content') else "",
+            "content_html": "",
+            "content_plain": "",
+            "content_format": "html",
+            "is_safe": False,
             "emotion": request.emotion if hasattr(request, 'emotion') else None,
             "status": "error"
         }
@@ -444,7 +754,11 @@ def get_user_journals(user_id: int = Depends(get_current_user), limit: int = 20,
             journal_list.append({
                 "id": journal.id,
                 "title": journal.title,
-                "content": journal.content,
+                "content": journal.content,  # 原始内容（向后兼容）
+                "content_html": journal.content_html,  # 净化后的HTML内容
+                "content_plain": journal.content_plain,  # 纯文本内容
+                "content_format": journal.content_format,  # 内容格式
+                "is_safe": journal.is_safe,  # 安全标识
                 "messages": messages,  # 返回对话历史
                 "session_id": journal.session_id,
                 "emotion": journal.emotion,  # 返回情绪信息
@@ -512,7 +826,11 @@ def get_journal_detail(journal_id: int, user_id: int = Depends(get_current_user)
         journal_data = {
             "id": journal.id,
             "title": journal.title,
-            "content": journal.content,
+            "content": journal.content,  # 原始内容（向后兼容）
+            "content_html": journal.content_html,  # 净化后的HTML内容
+            "content_plain": journal.content_plain,  # 纯文本内容
+            "content_format": journal.content_format,  # 内容格式
+            "is_safe": journal.is_safe,  # 安全标识
             "messages": messages,  # 返回对话历史
             "session_id": journal.session_id,
             "emotion": journal.emotion,  # 返回情绪信息
@@ -532,6 +850,102 @@ def get_journal_detail(journal_id: int, user_id: int = Depends(get_current_user)
     except Exception as e:
         logging.error(f"[❌ ERROR] 获取日记详情失败: {e}")
         raise HTTPException(status_code=500, detail="获取日记详情失败")
+
+@app.put("/journal/{journal_id}")
+def update_journal(journal_id: int, request: UpdateJournalRequest, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
+    """
+    更新用户的日记接口
+    
+    参数：
+        journal_id (int): 日记ID，从URL路径参数获取
+        参数来源：客户端请求的URL路径
+        request (UpdateJournalRequest): 包含更新字段的请求对象
+        参数来源：客户端发送的更新日记请求
+        user_id (int): 当前用户ID，通过JWT令牌自动获取
+        参数来源：get_current_user 函数从JWT令牌中提取
+    
+    返回：
+        Dict[str, Any]: 更新操作的结果
+    """
+    try:
+        logging.info(f"\n📝 收到更新日记请求：用户ID={user_id}, 日记ID={journal_id}")
+        
+        db: Session = SessionLocal()
+        
+        # 查询特定日记，确保只能更新自己的日记
+        journal = db.query(Journal).filter(
+            Journal.id == journal_id,
+            Journal.user_id == user_id
+        ).first()
+        
+        if not journal:
+            db.close()
+            raise HTTPException(status_code=404, detail="日记不存在")
+        
+        # 记录更新前的状态
+        updated_fields = []
+        
+        # 更新标题（如果提供）
+        if request.title is not None:
+            title = request.title.strip().replace('"', '').replace('"', '')
+            if len(title) > 50:
+                title = title[:50] + "..."
+            journal.title = title
+            updated_fields.append("title")
+        
+        # 更新内容（如果提供）
+        if request.content is not None:
+            # 使用新的HTML处理工具
+            from utils.html_processor import process_journal_content
+            
+            # 处理HTML内容
+            processed_content = process_journal_content(request.content)
+            
+            journal.content = processed_content['content']  # 原始内容（向后兼容）
+            journal.content_html = processed_content['content_html']  # 修复后的HTML内容
+            journal.content_plain = processed_content['content_plain']  # 纯文本内容
+            journal.content_format = processed_content['content_format']  # 内容格式
+            journal.is_safe = processed_content['is_safe']  # 安全标识
+            updated_fields.append("content")
+        
+        # 更新情绪（如果提供）
+        if request.emotion is not None:
+            journal.emotion = request.emotion
+            updated_fields.append("emotion")
+        
+        # 更新修改时间 - 使用东八区时间，与数据库模型保持一致
+        from datetime import timezone, timedelta
+        journal.updated_at = datetime.now(timezone(timedelta(hours=8)))
+        
+        # 提交更改
+        db.commit()
+        db.refresh(journal)
+        db.close()
+        
+        logging.info(f"✅ 日记更新成功，更新字段: {updated_fields}")
+        
+        return {
+            "status": "success",
+            "journal_id": journal.id,
+            "title": journal.title,
+            "content": journal.content,  # 原始内容（向后兼容）
+            "content_html": journal.content_html,  # 净化后的HTML内容
+            "content_plain": journal.content_plain,  # 纯文本内容
+            "content_format": journal.content_format,  # 内容格式
+            "is_safe": journal.is_safe,  # 安全标识
+            "emotion": journal.emotion,
+            "updated_fields": updated_fields,
+            "message": "日记更新成功"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"[❌ ERROR] 更新日记失败: {e}")
+        return {
+            "status": "error",
+            "message": "更新日记失败"
+        }
 
 @app.delete("/journal/{journal_id}")
 def delete_journal(journal_id: int, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:

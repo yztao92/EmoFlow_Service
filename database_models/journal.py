@@ -2,7 +2,7 @@
 # 功能：日记数据模型定义
 # 实现：使用SQLAlchemy ORM，存储用户心情日记
 
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone, timedelta
 from .database import Base
@@ -17,7 +17,11 @@ class Journal(Base):
         - id: 主键，日记唯一标识
         - user_id: 外键，关联用户ID
         - title: 日记标题
-        - content: 日记内容
+        - content: 日记内容（向后兼容，保留原字段）
+        - content_html: 净化后的HTML内容
+        - content_plain: 纯文本内容备份
+        - content_format: 内容格式（html, markdown, plain）
+        - is_safe: 安全标识
         - messages: 对话历史（JSON格式存储）
         - session_id: 关联的对话会话ID
         - emotion: 情绪标签
@@ -33,9 +37,15 @@ class Journal(Base):
     # 外键字段
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # 用户ID，外键，不可为空
     
-    # 日记内容字段
+    # 日记内容字段（向后兼容）
     title = Column(String, nullable=False)  # 日记标题，不可为空
-    content = Column(Text, nullable=False)  # 日记内容，不可为空
+    content = Column(Text, nullable=False)  # 日记内容，不可为空（向后兼容）
+    
+    # 新的安全内容字段
+    content_html = Column(Text, nullable=True)  # 净化后的HTML内容
+    content_plain = Column(Text, nullable=True)  # 纯文本内容备份
+    content_format = Column(String, default='html')  # 内容格式
+    is_safe = Column(Boolean, default=False)  # 安全标识
     
     # 关联信息字段
     messages = Column(Text, nullable=True)  # 对话历史，JSON格式存储，可为空

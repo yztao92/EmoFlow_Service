@@ -11,8 +11,7 @@ from typing import Dict, Any
 # 导入千问向量库系统
 from vectorstore.qwen_vectorstore import get_qwen_vectorstore, set_qwen_embedding_model
 from llm.qwen_embedding_factory import get_qwen_embedding_model
-from rag.prompt_router import route_prompt_by_emotion
-from rag.prompts import PROMPT_MAP
+from rag.prompts import UNIFIED_PROMPT
 from llm.llm_factory import chat_with_llm
 
 # 延迟初始化千问向量库和embedding模型
@@ -97,11 +96,10 @@ def run_rag_chain(
         3. 构造完整Prompt并调用LLM
         4. 清理和返回回复
     """
-    # ==================== 1. Prompt路由 ====================
-    # 使用传入的情绪参数进行Prompt路由
-    prompt_key = route_prompt_by_emotion(emotion)
-    prompt_template = PROMPT_MAP.get(prompt_key, PROMPT_MAP["default"])
-    logging.info(f"[Prompt 路由] 使用 prompt_key: {prompt_key}")
+    # ==================== 1. 使用统一Prompt ====================
+    # 直接使用统一的Prompt模板
+    prompt_template = UNIFIED_PROMPT
+    logging.info(f"[Prompt] 使用统一模板")
 
     # ==================== 2. 千问向量检索 ====================
     # 根据对话轮次决定检索数量：第一轮检索更多内容，后续轮次减少
@@ -120,7 +118,7 @@ def run_rag_chain(
         context = "抱歉，我没有找到相关的知识来回答您的问题。"
     else:
         # 记录检索结果
-        logging.info(f"\n🧠 [千问检索] 情绪={emotion}, prompt={prompt_key}, k={k}")
+        logging.info(f"\n🧠 [千问检索] 情绪={emotion}, prompt=统一模板, k={k}")
         for i, result in enumerate(search_results, 1):
             similarity = result.get('similarity', 0)
             title = result.get('title', '未知标题')
@@ -130,25 +128,27 @@ def run_rag_chain(
         # 将检索到的文档构造为上下文
         context_parts = []
         for result in search_results:
-            answer_summary = result.get('answer_summary', '')
             key_point = result.get('key_point', '')
             suggestion = result.get('suggestion', '')
             
-            # 组合文档信息
-            doc_info = f"摘要: {answer_summary}"
+            # 组合文档信息（只保留关键点和建议）
+            doc_info = ""
             if key_point:
-                doc_info += f"\n关键点: {key_point}"
+                doc_info += f"关键点: {key_point}"
             if suggestion:
-                doc_info += f"\n建议: {suggestion}"
+                if doc_info:  # 如果有关键点，添加换行
+                    doc_info += f"\n建议: {suggestion}"
+                else:  # 如果没有关键点，直接添加建议
+                    doc_info += f"建议: {suggestion}"
             
-            context_parts.append(doc_info)
+            if doc_info:  # 只有当有内容时才添加到列表
+                context_parts.append(doc_info)
         
         context = "\n\n".join(context_parts)
 
     # ==================== 5. 构造完整Prompt ====================
     # 使用Prompt模板格式化完整提示词
     prompt = prompt_template.format(
-        emotion=emotion,  # 当前情绪（用于Prompt风格）
         round_index=round_index,  # 对话轮次
         state_summary=state_summary,  # 状态摘要
         context=context,  # 检索到的知识上下文

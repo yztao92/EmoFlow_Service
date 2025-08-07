@@ -14,7 +14,7 @@
 
 ### **AI模型栈**
 - **Embedding模型**: 千问 `text-embedding-v4` - 文本向量化
-- **LLM模型**: 千问 `qwen-turbo` - 对话生成
+- **LLM模型**: 千问 `qwen-plus` - 对话生成
 - **向量数据库**: FAISS - 高效相似度检索
 - **元数据库**: SQLite - 存储文档元数据
 
@@ -182,7 +182,7 @@ Content-Type: application/json
 1. **用户输入**: 接收用户问题和情绪
 2. **向量化**: 使用千问 `text-embedding-v4` 生成向量
 3. **检索**: 在FAISS向量库中检索相似文档
-4. **生成**: 使用千问 `qwen-turbo` 生成回复
+4. **生成**: 使用千问 `qwen-plus` 生成回复
 5. **返回**: 返回个性化回复给用户
 
 ### **状态管理**

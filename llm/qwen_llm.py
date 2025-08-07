@@ -38,7 +38,7 @@ class QwenLLM:
         
         # 千问API配置
         self.api_url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
-        self.model = "qwen-turbo"  # 使用的模型名称
+        self.model = "qwen-plus"  # 使用的模型名称
         
         logger.info(f"✅ 千问LLM初始化成功: {self.model}")
     
