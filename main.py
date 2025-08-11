@@ -456,10 +456,20 @@ def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_us
         # 将对话历史转换为文本格式
         prompt = "\n".join(f"{m.role}: {m.content}" for m in request.messages)
         
-        # 生成日记内容的系统提示词（纯文本格式）
-        journal_system_prompt = f"""你是用户的情绪笔记助手，请根据以下对话内容，以"我"的视角，总结一段今天的心情日记。
-注意要自然、有情感，不要提到对话或 AI，只写个人的感受和经历。
-请用纯文本格式输出，不要包含任何HTML标签：\n-----------\n{prompt}\n-----------"""
+        # 使用新的情绪化日记生成prompt
+        from prompts.emotion_modes import get_journal_generation_prompt
+        
+        # 获取用户情绪状态（如果没有则默认为平和）
+        user_emotion = request.emotion or "平和"
+        
+        # 生成情绪化的日记生成prompt
+        journal_system_prompt = get_journal_generation_prompt(
+            emotion=user_emotion,
+            chat_history=prompt
+        )
+        
+        # 添加格式要求
+        journal_system_prompt += "\n\n注意：请以'我'的视角，总结一段今天的心情日记。要自然、有情感，不要提到对话或AI，只写个人的感受和经历。请用纯文本格式输出，不要包含任何HTML标签。"
         
         # 调用千问LLM生成日记内容（纯文本）
         from llm.llm_factory import chat_with_qwen_llm

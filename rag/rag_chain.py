@@ -12,6 +12,7 @@ from typing import Dict, Any
 from vectorstore.qwen_vectorstore import get_qwen_vectorstore, set_qwen_embedding_model
 from llm.qwen_embedding_factory import get_qwen_embedding_model
 from rag.prompts import UNIFIED_PROMPT
+from prompts.emotion_modes import build_emotion_prompt
 from llm.llm_factory import chat_with_llm
 
 # 延迟初始化千问向量库和embedding模型
@@ -96,10 +97,21 @@ def run_rag_chain(
         3. 构造完整Prompt并调用LLM
         4. 清理和返回回复
     """
-    # ==================== 1. 使用统一Prompt ====================
-    # 直接使用统一的Prompt模板
-    prompt_template = UNIFIED_PROMPT
-    logging.info(f"[Prompt] 使用统一模板")
+    # ==================== 1. 使用情绪化Prompt ====================
+    # 根据情绪状态构建动态prompt
+    if emotion and emotion != "neutral":
+        # 使用新的情绪化prompt系统
+        prompt_template = build_emotion_prompt(
+            emotion=emotion,
+            round_index=round_index,
+            user_message=query,
+            context=""
+        )
+        logging.info(f"[Prompt] 使用情绪化模板 - {emotion}")
+    else:
+        # 使用原有的统一prompt模板
+        prompt_template = UNIFIED_PROMPT
+        logging.info(f"[Prompt] 使用统一模板")
 
     # ==================== 2. 千问向量检索 ====================
     # 根据对话轮次决定检索数量：第一轮检索更多内容，后续轮次减少
