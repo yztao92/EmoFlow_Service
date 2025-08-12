@@ -187,17 +187,24 @@ _qwen_vectorstore = None
 
 def get_qwen_vectorstore() -> QwenVectorStore:
     """
-    获取千问向量库实例（单例模式）
+    获取千问向量库实例（每次调用都创建新实例，避免线程问题）
     
     返回：
         QwenVectorStore: 向量库实例
     """
-    global _qwen_vectorstore
-    if _qwen_vectorstore is None:
-        faiss_path = "dataset/faiss_index.bin"
-        metadata_path = "dataset/metadata.db"
-        _qwen_vectorstore = QwenVectorStore(faiss_path, metadata_path)
-    return _qwen_vectorstore
+    faiss_path = "dataset/faiss_index.bin"
+    metadata_path = "dataset/metadata.db"
+    vectorstore = QwenVectorStore(faiss_path, metadata_path)
+    
+    # 动态设置embedding模型
+    try:
+        from llm.qwen_embedding_factory import get_qwen_embedding_model
+        embedding_model = get_qwen_embedding_model()
+        vectorstore.set_embedding_model(embedding_model)
+    except Exception as e:
+        logging.warning(f"⚠️ 动态设置embedding模型失败: {e}")
+    
+    return vectorstore
 
 def set_qwen_embedding_model(embedding_model):
     """

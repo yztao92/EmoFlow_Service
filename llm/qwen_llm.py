@@ -152,9 +152,7 @@ class QwenLLM:
             
             # 打印调试信息
             logger.info(f"🔍 千问API请求URL: {self.api_url}")
-            logger.info(f"🔍 千问API请求数据: {json.dumps(data, ensure_ascii=False, indent=2)}")
             logger.info(f"🔍 千问API响应状态: {response.status_code}")
-            logger.info(f"🔍 千问API响应内容: {response.text}")
             
             response.raise_for_status()
             return response.json()

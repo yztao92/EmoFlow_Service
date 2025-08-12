@@ -14,9 +14,11 @@ from sqlalchemy.orm import Session
 from jose import jwt, jwk
 from jose.utils import base64url_decode
 from datetime import datetime, timedelta
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 # 导入项目内部模块
-from rag.rag_chain import run_rag_chain  # RAG 聊天链，用于生成AI回复
+from prompts.prompt_flow_controller import chat_once  # 新编排：分析→检索→生成
 from dialogue.state_tracker import StateTracker  # 对话状态跟踪器
 from database_models import init_db, SessionLocal, User, Journal  # 数据库模型
 
@@ -73,17 +75,96 @@ app.add_middleware(
 # 存储用户会话状态，key为session_id，value为StateTracker实例
 session_states: Dict[str, StateTracker] = {}
 
+# 定时任务调度器
+scheduler = BackgroundScheduler()
+
 # ==================== 应用启动事件 ====================
 @app.on_event("startup")
 def on_startup():
     """
     应用启动时执行的初始化函数
-    功能：初始化数据库、加载Apple公钥
+    功能：初始化数据库、加载Apple公钥、初始化向量库、启动定时任务
     """
     init_db()  # 初始化数据库表结构
     global apple_keys
     apple_keys = requests.get(APPLE_PUBLIC_KEYS_URL).json()["keys"]  # 获取Apple公钥列表
     logger.info("✅ Apple 公钥加载成功")
+    
+    # 初始化embedding模型（不初始化向量库，避免线程问题）
+    try:
+        from llm.qwen_embedding_factory import get_qwen_embedding_model
+        embedding_model = get_qwen_embedding_model()
+        logger.info("✅ Embedding模型初始化成功")
+    except Exception as e:
+        logger.warning(f"⚠️ Embedding模型初始化失败: {e}")
+        logger.warning("⚠️ 知识检索功能可能无法正常使用")
+    
+    # 启动定时任务：每天凌晨12点重置所有用户的heart值
+    start_heart_reset_scheduler()
+    logger.info("✅ 定时任务调度器启动成功")
+
+# ==================== 定时任务管理 ====================
+def reset_all_users_heart():
+    """
+    重置所有用户的heart值为20的定时任务函数
+    功能：每天凌晨12点自动执行，将所有用户的heart值重置为20
+    """
+    try:
+        logging.info("🕛 开始执行定时任务：重置所有用户的heart值")
+        
+        # 数据库操作：重置所有用户的heart值
+        db: Session = SessionLocal()
+        try:
+            # 获取所有用户数量
+            total_users = db.query(User).count()
+            
+            # 重置所有用户的heart值为100
+            db.query(User).update({"heart": 100})
+            db.commit()
+            
+            logging.info(f"✅ 定时任务执行成功：已重置 {total_users} 个用户的heart值为100")
+            
+        except Exception as e:
+            db.rollback()
+            logging.error(f"❌ 定时任务执行失败：{e}")
+            raise
+        finally:
+            db.close()
+            
+    except Exception as e:
+        logging.error(f"❌ 定时任务执行异常：{e}")
+
+def start_heart_reset_scheduler():
+    """
+    启动heart重置定时任务调度器
+    功能：配置并启动定时任务，每天凌晨12点执行
+    """
+    try:
+        # 添加定时任务：每天凌晨12点执行
+        scheduler.add_job(
+            func=reset_all_users_heart,
+            trigger=CronTrigger(hour=0, minute=0),  # 每天凌晨00:00执行
+            id="heart_reset_job",
+            name="每日重置用户heart值",
+            replace_existing=True  # 如果任务已存在则替换
+        )
+        
+        # 启动调度器
+        scheduler.start()
+        logging.info("✅ Heart重置定时任务已启动：每天凌晨00:00执行")
+        
+    except Exception as e:
+        logging.error(f"❌ 启动定时任务失败：{e}")
+
+@app.on_event("shutdown")
+def on_shutdown():
+    """
+    应用关闭时执行的清理函数
+    功能：关闭定时任务调度器
+    """
+    if scheduler.running:
+        scheduler.shutdown()
+        logging.info("✅ 定时任务调度器已关闭")
 
 # ==================== 基础路由 ====================
 @app.get("/")
@@ -319,7 +400,8 @@ def get_user_profile(user_id: int = Depends(get_current_user)) -> Dict[str, Any]
             "user": {
                 "id": user.id,
                 "name": user.name,
-                "email": user.email
+                "email": user.email,
+                "heart": user.heart
             }
         }
         
@@ -328,6 +410,98 @@ def get_user_profile(user_id: int = Depends(get_current_user)) -> Dict[str, Any]
     except Exception as e:
         logging.error(f"❌ 获取用户资料失败: {e}")
         raise HTTPException(status_code=500, detail="获取用户资料失败")
+
+# ==================== 用户心数管理模块 ====================
+
+class UpdateHeartRequest(BaseModel):
+    """
+    更新用户心数请求的数据模型
+    参数来源：客户端发送的心数更新请求
+    """
+    heart: int  # 新的心数值
+
+@app.put("/user/heart")
+def update_user_heart(request: UpdateHeartRequest, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
+    """
+    更新用户心数接口
+    功能：允许用户修改自己的心数值
+    
+    参数：
+        request (UpdateHeartRequest): 包含要更新的心数值
+        user_id (int): 当前登录用户ID（从JWT token获取）
+    
+    返回：
+        dict: 包含更新后的用户心数信息
+    """
+    try:
+        logging.info(f"🔧 收到用户心数更新请求: user_id={user_id}, heart={request.heart}")
+        
+        # 验证心数值范围（可选：限制在合理范围内）
+        if request.heart < 0:
+            raise HTTPException(status_code=400, detail="心数值不能为负数")
+        
+        # 数据库操作：更新用户心数
+        db: Session = SessionLocal()
+        user = db.query(User).filter(User.id == user_id).first()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        
+        # 更新心数值
+        user.heart = request.heart
+        db.commit()
+        db.refresh(user)
+        
+        logging.info(f"✅ 用户心数更新成功: user_id={user_id}, heart={user.heart}")
+        
+        return {
+            "status": "ok",
+            "message": "心数更新成功",
+            "user": {
+                "id": user.id,
+                "heart": user.heart
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"❌ 更新用户心数失败: {e}")
+        raise HTTPException(status_code=500, detail="更新用户心数失败")
+
+@app.get("/user/heart")
+def get_user_heart(user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
+    """
+    获取用户心数接口
+    功能：获取当前登录用户的心数值
+    
+    参数：
+        user_id (int): 当前登录用户ID（从JWT token获取）
+    
+    返回：
+        dict: 包含用户心数信息
+    """
+    try:
+        # 数据库操作：获取用户心数
+        db: Session = SessionLocal()
+        user = db.query(User).filter(User.id == user_id).first()
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="用户不存在")
+        
+        return {
+            "status": "ok",
+            "user": {
+                "id": user.id,
+                "heart": user.heart
+            }
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"❌ 获取用户心数失败: {e}")
+        raise HTTPException(status_code=500, detail="获取用户心数失败")
 
 # ==================== 聊天模块 ====================
 
@@ -367,31 +541,56 @@ class UpdateJournalRequest(BaseModel):
     emotion: Optional[str] = None  # 情绪字段（可选）
 
 @app.post("/chat")
-def chat_with_user(request: ChatRequest) -> Dict[str, Any]:
+def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
     """
     聊天接口：处理用户消息并返回AI回复
     
     参数：
         request (ChatRequest): 包含会话ID、消息历史和情绪信息的请求对象
         参数来源：客户端（iOS/Web）发送的聊天请求
+        user_id (int): 当前用户ID，通过JWT令牌自动获取
+        参数来源：get_current_user 函数从JWT令牌中提取
     
     返回：
         Dict[str, Any]: 包含AI回复的响应对象
     """
-    logging.info("收到 /chat 请求")
+    logging.info(f"收到 /chat 请求，用户ID: {user_id}")
     try:
         logging.info(f"\n🔔 收到请求：{request.json()}")
         
-        # 获取或创建会话状态跟踪器
-        state = session_states.setdefault(request.session_id, StateTracker())
+        # 检查用户heart值是否足够（每次聊天消耗2个heart）
+        db: Session = SessionLocal()
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                raise HTTPException(status_code=404, detail="用户不存在")
+            
+            if user.heart < 2:
+                raise HTTPException(status_code=403, detail="心数不足，无法继续聊天，请等待明天重置或充值")
+            
+            # 消耗2个heart值
+            user.heart -= 2
+            db.commit()
+            db.refresh(user)
+            
+            logging.info(f"💔 用户 {user.name} (ID: {user_id}) 聊天消耗2个heart，剩余: {user.heart}")
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            db.rollback()
+            logging.error(f"❌ 更新用户heart值失败: {e}")
+            raise HTTPException(status_code=500, detail="系统错误，请稍后再试")
+        finally:
+            db.close()
         
-        # 更新对话历史（直接覆盖，避免重复）
-        state.history = [(m.role, m.content) for m in request.messages]
+        # 获取或创建会话状态跟踪器（使用用户ID作为会话标识的一部分）
+        session_key = f"user_{user_id}_{request.session_id}"
+        state = session_states.setdefault(session_key, StateTracker())
         
-        # 提取用户最近3条消息合并作为查询
+        # 提取用户最新一条消息作为查询
         user_messages = [m for m in request.messages if m.role == "user"]
-        recent_queries = [m.content for m in user_messages[-3:]]
-        user_query = " ".join(recent_queries)
+        user_query = user_messages[-1].content if user_messages else ""
         logging.info(f"📨 [用户提问] {user_query}")
 
         # 使用前端传入的情绪，如果没有则默认为 neutral
@@ -399,32 +598,62 @@ def chat_with_user(request: ChatRequest) -> Dict[str, Any]:
         logging.info(f"🔍 [emotion] 使用前端情绪 → {emotion}")
 
         # 计算对话轮次
-        user_messages = [m for m in request.messages if m.role == "user"]
         round_index = len(user_messages)
         logging.info(f"🔁 [轮次] 用户发言轮次：{round_index}")
 
-        # 生成对话状态摘要
+        # 生成对话状态摘要（使用之前的对话历史，不包含当前用户输入）
         context_summary = state.summary(last_n=10)
         logging.info(f"📝 [状态摘要]\n{context_summary}")
 
-        # 调用RAG链生成AI回复
-        answer = run_rag_chain(
-            query=user_query,  # 用户查询
-            round_index=round_index,  # 对话轮次
-            state_summary=context_summary,  # 状态摘要
-            emotion=emotion  # 前端传入的情绪
-        )
+        # —— 新：补充一些给分析步用的字段 —— #
+        # 1) 历史已说过的观点（若暂时没有落库，就先给空字符串）
 
-        # 更新AI回复到对话历史
+        # 2) 上一轮是否已提问（简单规则：看上一条 assistant 是否带问号）
+        last_assistant_msgs = [m.content for m in request.messages if m.role == "assistant"]
+        last_turn_had_question = "yes" if (last_assistant_msgs and "?" in last_assistant_msgs[-1]) else "no"
+        # 3) 记忆要点/个性化（没有可先空）
+        memory_bullets = ""   # 例如："爱猫；常跑步；在上海工作"
+        fewshots = ""          # 你若准备了 few-shot，可在 rag/generator 里拼
+
+        # —— 调用新编排：分析→（按需检索≥0.50）→生成 —— #
+        res = chat_once(
+            question=user_query,
+            round_index=round_index,
+            state_summary=context_summary,
+
+            last_turn_had_question=last_turn_had_question,
+            memory_bullets=memory_bullets,
+            fewshots=fewshots,
+        )
+        answer = res["answer"]
+        dbg = res.get("debug", {})
+        logging.info(f"🧩 [编排] {dbg}")
+
+        # 更新当前轮次到对话历史（用户输入 + AI回复）
+        state.update_message("user", user_query)
         state.update_message("assistant", answer)
+
+        # 获取用户最新的heart值
+        db: Session = SessionLocal()
+        try:
+            current_user = db.query(User).filter(User.id == user_id).first()
+            current_heart = current_user.heart if current_user else 0
+        except Exception as e:
+            logging.error(f"❌ 获取用户heart值失败: {e}")
+            current_heart = 0
+        finally:
+            db.close()
 
         return {
             "response": {
                 "answer": answer,  # AI生成的回复
-                "references": []  # 引用信息（当前为空）
+                "references": [],  # 引用信息（当前为空）
+                "user_heart": current_heart  # 返回用户剩余heart值
             }
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logging.error(f"[❌ ERROR] 聊天接口处理失败: {e}")
         return {
@@ -453,23 +682,46 @@ def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_us
     try:
         logging.info(f"\n📝 收到生成心情日记请求：用户ID={user_id}, 请求={request.json()}")
         
+        # 检查用户heart值是否足够（每次生成日记消耗4个heart）
+        db: Session = SessionLocal()
+        try:
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                raise HTTPException(status_code=404, detail="用户不存在")
+            
+            if user.heart < 4:
+                raise HTTPException(status_code=403, detail="心数不足，无法生成日记，请等待明天重置或充值")
+            
+            # 消耗4个heart值
+            user.heart -= 4
+            db.commit()
+            db.refresh(user)
+            
+            logging.info(f"💔 用户 {user.name} (ID: {user_id}) 生成日记消耗4个heart，剩余: {user.heart}")
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            db.rollback()
+            logging.error(f"❌ 更新用户heart值失败: {e}")
+            raise HTTPException(status_code=500, detail="系统错误，请稍后再试")
+        finally:
+            db.close()
+        
         # 将对话历史转换为文本格式
         prompt = "\n".join(f"{m.role}: {m.content}" for m in request.messages)
         
         # 使用新的情绪化日记生成prompt
-        from prompts.emotion_modes import get_journal_generation_prompt
+        from prompts.journal_prompts import get_journal_generation_prompt
         
         # 获取用户情绪状态（如果没有则默认为平和）
         user_emotion = request.emotion or "平和"
         
-        # 生成情绪化的日记生成prompt
+        # 生成情绪化的日记生成prompt（已包含格式要求）
         journal_system_prompt = get_journal_generation_prompt(
             emotion=user_emotion,
             chat_history=prompt
         )
-        
-        # 添加格式要求
-        journal_system_prompt += "\n\n注意：请以'我'的视角，总结一段今天的心情日记。要自然、有情感，不要提到对话或AI，只写个人的感受和经历。请用纯文本格式输出，不要包含任何HTML标签。"
         
         # 调用千问LLM生成日记内容（纯文本）
         from llm.llm_factory import chat_with_qwen_llm
@@ -515,7 +767,7 @@ def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_us
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             font-size: 20px;
             font-weight: 300; /* light 粗细 */
-            line-height: 1.6;
+            line-height: 1.3;
             margin: 0;
             padding: 0;
             text-align: center; /* 默认居中对齐 */
@@ -552,7 +804,7 @@ def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_us
         
         /* 换行处理 */
         br {{
-            line-height: 1.6;
+            line-height: 1.3;
         }}
     </style>
 </head>
@@ -618,6 +870,17 @@ def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_us
         finally:
             db.close()
         
+        # 获取用户最新的heart值
+        db: Session = SessionLocal()
+        try:
+            current_user = db.query(User).filter(User.id == user_id).first()
+            current_heart = current_user.heart if current_user else 0
+        except Exception as e:
+            logging.error(f"❌ 获取用户heart值失败: {e}")
+            current_heart = 0
+        finally:
+            db.close()
+        
         return {
             "journal": journal_text,  # 生成的日记内容（原始纯文本）
             "content_html": processed_content['content_html'],  # 修复后的HTML内容
@@ -627,7 +890,8 @@ def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_us
             "title": title,  # 生成的日记标题
             "journal_id": journal_entry.id if 'journal_entry' in locals() else None,  # 日记ID
             "emotion": request.emotion,  # 情绪信息
-            "status": "success"
+            "status": "success",
+            "user_heart": current_heart  # 返回用户剩余heart值
         }
 
     except Exception as e:

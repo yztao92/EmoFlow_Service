@@ -14,3 +14,4 @@ torchvision
 torchaudio
 sentence-transformers
 dashscope
+apscheduler
