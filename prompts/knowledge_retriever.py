@@ -33,19 +33,19 @@ def _distill_snippets(docs: List[Dict[str, Any]], max_items:int=3) -> List[str]:
     bullets = [line.strip(" -•·").strip() for line in (answer.split("\n")) if line.strip()]
     return bullets[:max_items]
 
-def retrieve_bullets(queries: List[str]) -> List[str]:
-    if not queries:
-        logging.info("⚠️ [检索] 无 queries，返回空")
+def retrieve_bullets(rag_queries: List[str]) -> List[str]:
+    if not rag_queries:
+        logging.info("⚠️ [检索] 无 rag_queries，返回空")
         return []
 
-    logging.info(f"🚀 [检索] 开始知识检索，查询数量: {len(queries)}")
-    logging.info(f"🔍 [检索] 查询列表: {queries}")
+    logging.info(f"🚀 [检索] 开始知识检索，查询数量: {len(rag_queries)}")
+    logging.info(f"🔍 [检索] 查询列表: {rag_queries}")
     
     vs = get_qwen_vectorstore()
     cands: List[Dict[str,Any]] = []
 
-    for i, qtext in enumerate(queries):
-        logging.info(f"📝 [检索] 处理第 {i+1}/{len(queries)} 个查询")
+    for i, qtext in enumerate(rag_queries):
+        logging.info(f"📝 [检索] 处理第 {i+1}/{len(rag_queries)} 个查询")
         
         # 处理字典格式的查询
         if isinstance(qtext, dict):

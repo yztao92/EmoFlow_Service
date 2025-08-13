@@ -7,7 +7,6 @@ from prompts.chat_prompts_generator import generate_reply
 
 USE_NEW_PIPE = os.getenv("USE_NEW_RAG_PIPE", "1") == "1"
 RAG_MIN_SIM = float(os.getenv("RAG_MIN_SIM", "0.50"))
-RAG_ONLY_ON_STAGE = os.getenv("RAG_ONLY_ON_STAGE", "建议")
 
 def _legacy_generate(question: str, state_summary: str, round_index: int) -> str:
     return "（旧链路占位输出）"
@@ -33,20 +32,16 @@ def chat_once(
         ana = analyze_turn(
             round_index=round_index,
             state_summary=state_summary,
-            question=question,
-            last_turn_had_question=last_turn_had_question,
+            question=question
         )
     except Exception:
-        ana = {"mode":"普通","stage":"暖场","context_type":"闲聊",
-               "ask_slot":True,"need_rag":False,"queries":[],
-               "points":["接住对方","一句轻回应"]}
+        ana = {"emotion":"neutral","intent":"chitchat","ask_slot":"gentle",
+               "need_rag":False,"rag_queries":[]}
 
-    # Step 1.5: 检索（受 need_rag & 阶段控制）
+    # Step 1.5: 检索（受 need_rag 控制）
     rag_bullets: List[str] = []
-    stage = _safe_get(ana, "stage", "")
-    allowed_stages = [s.strip() for s in RAG_ONLY_ON_STAGE.split(",") if s.strip()]
-    if _safe_get(ana, "need_rag", False) and (stage in allowed_stages):
-        rag_bullets = retrieve_bullets(_safe_get(ana, "queries", []))
+    if _safe_get(ana, "need_rag", False):
+        rag_bullets = retrieve_bullets(_safe_get(ana, "rag_queries", []))
 
     # 兜底 - 确保 ask_slot 有值
     if not _safe_get(ana, "ask_slot"):
