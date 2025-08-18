@@ -1,78 +1,113 @@
 # File: dialogue/state_tracker.py
-# 功能：对话状态跟踪器，管理用户会话状态和对话历史
+# 功能：对话状态跟踪器（纯存储 + 兜底阶段推断）
+# 职责：仅管理对话历史与摘要；不做复杂语义分析
+# 额外：提供按轮次的 stage 兜底推断（warmup/mid/wrap）
 
-from typing import List, Tuple
+from __future__ import annotations
+from typing import List, Tuple, Optional
 
 class StateTracker:
     """
-    对话状态跟踪器类
-    功能：管理单个用户会话的状态信息，包括对话历史
-    
-    状态组成：
-        - history: 对话历史记录
+    轻量会话状态容器：
+    - 保存对话历史 (role, content)
+    - 提供最近若干条的摘要
+    - 统计用户轮次
+    - 提供按轮次的 stage 兜底推断：1-2→warmup，3-6→mid，≥7→wrap
     """
-    
-    def __init__(self):
-        """
-        初始化状态跟踪器
-        创建空的对话历史列表
-        """
-        # 对话历史：存储所有对话消息，格式为 (role, content)
-        self.history: List[Tuple[str, str]] = []
 
-    def update_message(self, role: str, content: str):
+    def __init__(self, max_history: int = 200):
         """
-        更新对话历史
-        
-        参数：
-            role (str): 消息角色（user/assistant）
-            参数来源：main.py中的消息处理
-            content (str): 消息内容
-            参数来源：用户输入或AI回复
+        初始化
+        :param max_history: 最大保留的消息条数（超过则从最早开始丢弃）
+        """
+        self._max_history = max_history
+        self.history: List[Tuple[str, str]] = []  # [(role, content)]
+
+    # ========== 基础 API ==========
+
+    def update_message(self, role: str, content: str) -> None:
+        """
+        写入一条消息
+        :param role: "user" | "assistant"
+        :param content: 文本内容
         """
         self.history.append((role, content))
+        # 控制上限
+        overflow = len(self.history) - self._max_history
+        if overflow > 0:
+            self.history = self.history[overflow:]
 
     def get_round_count(self) -> int:
         """
-        获取当前对话轮次
-        
-        返回：
-            int: 当前对话轮次（用户消息数量）
+        获取当前对话轮次（按 user 消息计数）
         """
-        return len([r for r, _ in self.history if r == "user"])
+        return sum(1 for r, _ in self.history if r == "user")
 
-    def summary(self, last_n: int = 3) -> str:
+    def summary(self, last_n: int = 10) -> str:
         """
-        生成对话状态摘要
-        
-        参数：
-            last_n (int): 最近n轮对话，默认3
-            参数来源：main.py中调用时传入的参数
-        
-        返回：
-            str: 格式化的状态摘要文本
-        
-        摘要内容：
-            - 对话历史（最近n轮）
+        生成极简摘要：取最近 last_n 条消息（user/assistant 各自作为一条）
+        :param last_n: 取最近多少条消息（非“轮”）
         """
+        tail = self.history[-last_n:]
         lines: List[str] = []
-        
-        # 显示最近n轮对话
-        for role, content in self.history[-2 * last_n:]:
+        for role, content in tail:
             speaker = "用户" if role == "user" else "AI"
-            lines.append(f"• {speaker}: {content}")
-        
+            # 单行清洗：去换行，留一部分内容
+            text = (content or "").strip().replace("\n", " ")
+            if len(text) > 200:
+                text = text[:200] + "..."
+            lines.append(f"• {speaker}: {text}")
         return "【对话历史】\n" + "\n".join(lines)
 
     def get_recent_user_query(self, last_n: int = 1) -> str:
         """
-        获取最近n次用户查询
-        
-        参数：
-            last_n (int): 获取最近n次查询，默认1
-            参数来源：调用方传入的参数
-        
-        返回：
-            str: 最近n次用户查询的合并文本
+        获取最近 n 次用户输入（合并为一句）
         """
-        return "，".join([c for r, c in self.history if r == "user"][-last_n:])
+        recent = [c for r, c in self.history if r == "user"][-last_n:]
+        return "，".join(s.strip() for s in recent if s and s.strip())
+
+    def last_user_message(self) -> Optional[str]:
+        """
+        获取最近一条用户消息
+        """
+        for role, content in reversed(self.history):
+            if role == "user":
+                return content
+        return None
+
+    def last_assistant_message(self) -> Optional[str]:
+        """
+        获取最近一条助手消息
+        """
+        for role, content in reversed(self.history):
+            if role == "assistant":
+                return content
+        return None
+
+    # ========== 兜底阶段推断（仅按轮次） ==========
+
+    def get_stage_by_round(self) -> str:
+        """
+        按轮次做兜底阶段推断（不依赖 LLM）：
+        - 轮次 ≤ 2        → "warmup"
+        - 3 ≤ 轮次 ≤ 6    → "mid"
+        - 轮次 ≥ 7        → "wrap"
+        """
+        rounds = self.get_round_count()
+        if rounds <= 2:
+            return "warmup"
+        if rounds <= 6:
+            return "mid"
+        return "wrap"
+
+    # ========== 可选：快速导出 ==========
+
+    def to_dict(self) -> dict:
+        """
+        导出简要状态（可用于调试/日志）
+        """
+        return {
+            "rounds": self.get_round_count(),
+            "stage_by_round": self.get_stage_by_round(),
+            "history_len": len(self.history),
+        }

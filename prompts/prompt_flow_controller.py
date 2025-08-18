@@ -1,104 +1,33 @@
-# -*- coding: utf-8 -*-
 # prompts/prompt_flow_controller.py
-
-
-from __future__ import annotations
-from typing import Dict, Any, List, Optional
 import logging
-
-from prompts.chat_analysis import analyze_turn
-from prompts.knowledge_retriever import retrieve_bullets
-from prompts.prompt_spec import PromptSpec, map_reply_length
 from prompts.chat_prompts_generator import build_final_prompt
 from llm.llm_factory import chat_with_llm
+from retriever.search import retrieve  # 你已有的话就沿用
 
-# 可调参数
-RAG_MIN_SIM = 0.50
-TOP_K = 15
-
-
-def run_prompt_flow(
-    question: str,
-    state_summary: str,
-    round_index: int,
-    memory_bullets: Optional[List[str]] = None,
-    fewshots: str = "",
-    history_messages: Optional[list] = None
-) -> Dict[str, Any]:
-    """
-    新编排主流程：返回 answer + debug
-    """
-    # 1) LLM 分析（情绪/阶段/意图/ask_slot/pace/need_rag/...）
-    ana = analyze_turn(round_index, state_summary, question)
-
-    # 2) reply_length 决策（集中规则，符合 PDF 逻辑）
-    reply_length = map_reply_length(
-        stage=ana.get("stage", "暖场"),
-        intent=ana.get("intent", "闲聊"),
-        pace=ana.get("pace", "normal"),
-    )
-
-    # 3) 检索（可选）：把检索结果蒸馏为 bullets
-    rag_bullets: List[str] = []
-    if ana.get("need_rag"):
+def chat_once(analysis: dict, state_summary: str, question: str) -> str:
+    # 可选 RAG：只在 need_rag=True 时触发
+    rag_bullets = []
+    if analysis.get("need_rag"):
         try:
-            queries = ana.get("rag_queries", []) or []
-            rag_bullets = retrieve_bullets(queries, min_sim=RAG_MIN_SIM, top_k=TOP_K)
+            docs = retrieve(analysis.get("rag_queries", []), top_k=4)
+            rag_bullets = [d.snippet for d in docs]
+            # 也可以把结果片段塞回 analysis.rag_queries，或单独注入到 prompt
         except Exception as e:
-            logging.warning(f"[prompt_flow] RAG 检索失败，继续无检索：{e}")
+            logging.warning("RAG 检索失败，跳过：%s", e)
 
-    # 4) 组装 PromptSpec
-    spec = PromptSpec(
-        emotion=ana.get("emotion", "普通"),
-        stage=ana.get("stage", "暖场"),
-        intent=ana.get("intent", "闲聊"),
-        ask_slot=ana.get("ask_slot", "gentle"),
-        pace=ana.get("pace", "normal"),
-        reply_length=reply_length,
-        need_rag=ana.get("need_rag", False),
-        rag_queries=ana.get("rag_queries", []) or [],
-        state_summary=state_summary or "",
-        question=question or "",
-        fewshots=fewshots or "",
-        memory_bullets=memory_bullets or [],
-        rag_bullets=rag_bullets or [],
-        history_messages=history_messages or [],
-    )
+    # 拼装最终 Prompt
+    final_prompt = build_final_prompt({**analysis, "rag_queries": analysis.get("rag_queries", [])}, state_summary, question)
 
-    # 5) 最终 Prompt 与生成
-    final_prompt = build_final_prompt(spec)
+    # 生成
     answer = chat_with_llm(final_prompt)
 
-    return {
-        "answer": answer,
-        "debug": {
-            "analysis": ana,
-            "reply_length": reply_length,
-            "rag_bullets": rag_bullets,
-            "final_prompt_preview": final_prompt[:1200],
-        },
-    }
-
-
-# ===== 向后兼容的旧入口 =====
-def chat_once(
-    question: str,
-    state_summary: str = "",
-    round_index: int = 1,
-    memory_bullets: Optional[List[str]] = None,
-    fewshots: str = "",
-    history_messages: Optional[list] = None
-) -> Dict[str, Any]:
-    """
-    兼容 main.py 的旧调用方式。
-    - 入参尽量宽松，默认即可跑通
-    - 返回结构与 run_prompt_flow 一致
-    """
-    return run_prompt_flow(
-        question=question,
-        state_summary=state_summary,
-        round_index=round_index,
-        memory_bullets=memory_bullets,
-        fewshots=fewshots,
-        history_messages=history_messages
-    )
+    # 失败回退（为空/过短时）
+    if not answer or len(answer.strip()) < 4:
+        # 简单回退：根据 stage 给一条保守句式
+        fallback = {
+            "warmup": "我在，先把这件事最重要的一点说给我听，好吗？",
+            "mid":    "我先给一个可执行的小步骤：先把关键人/关键事写下来，然后选一项立刻行动。",
+            "wrap":   "先到这儿。把今天的收获记一下，明天我来提醒你继续推进？",
+        }
+        answer = fallback.get(analysis.get("stage","mid"), fallback["mid"])
+    return answer
