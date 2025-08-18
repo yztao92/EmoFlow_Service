@@ -31,7 +31,7 @@ class QwenEmbeddingModel:
             dashscope.api_key = api_key
         
         self.model_name = "text-embedding-v4"
-        logging.info(f"✅ 千问Embedding模型初始化成功: {self.model_name}")
+        # logging.info(f"✅ 千问Embedding模型初始化成功: {self.model_name}")
     
     def embed_query(self, text: str) -> List[float]:
         """

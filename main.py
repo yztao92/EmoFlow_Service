@@ -88,20 +88,20 @@ def on_startup():
     init_db()  # 初始化数据库表结构
     global apple_keys
     apple_keys = requests.get(APPLE_PUBLIC_KEYS_URL).json()["keys"]  # 获取Apple公钥列表
-    logger.info("✅ Apple 公钥加载成功")
+    # logger.info("✅ Apple 公钥加载成功")
     
     # 初始化embedding模型（不初始化向量库，避免线程问题）
     try:
         from llm.qwen_embedding_factory import get_qwen_embedding_model
         embedding_model = get_qwen_embedding_model()
-        logger.info("✅ Embedding模型初始化成功")
+        # logger.info("✅ Embedding模型初始化成功")
     except Exception as e:
-        logger.warning(f"⚠️ Embedding模型初始化失败: {e}")
-        logger.warning("⚠️ 知识检索功能可能无法正常使用")
+        logging.warning(f"⚠️ Embedding模型初始化失败: {e}")
+        logging.warning("⚠️ 知识检索功能可能无法正常使用")
     
     # 启动定时任务：每天凌晨12点重置所有用户的heart值
     start_heart_reset_scheduler()
-    logger.info("✅ 定时任务调度器启动成功")
+    # logger.info("✅ 定时任务调度器启动成功")
 
 # ==================== 定时任务管理 ====================
 def reset_all_users_heart():
@@ -573,7 +573,6 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
             db.commit()
             db.refresh(user)
             
-            logging.info(f"💔 用户 {user.name} (ID: {user_id}) 聊天消耗2个heart，剩余: {user.heart}")
             
         except HTTPException:
             raise
@@ -591,19 +590,15 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
         # 提取用户最新一条消息作为查询
         user_messages = [m for m in request.messages if m.role == "user"]
         user_query = user_messages[-1].content if user_messages else ""
-        logging.info(f"📨 [用户提问] {user_query}")
 
         # 使用前端传入的情绪，如果没有则默认为 neutral
         emotion = request.emotion or "neutral"
-        logging.info(f"🔍 [emotion] 使用前端情绪 → {emotion}")
 
         # 计算对话轮次
         round_index = len(user_messages)
-        logging.info(f"🔁 [轮次] 用户发言轮次：{round_index}")
 
         # 生成对话状态摘要（使用之前的对话历史，不包含当前用户输入）
         context_summary = state.summary(last_n=10)
-        logging.info(f"📝 [状态摘要]\n{context_summary}")
 
         # —— 新：补充一些给分析步用的字段 —— #
         # 1) 历史已说过的观点（若暂时没有落库，就先给空字符串）
@@ -616,18 +611,23 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
         fewshots = ""          # 你若准备了 few-shot，可在 rag/generator 里拼
 
         # —— 调用新编排：分析→（按需检索≥0.50）→生成 —— #
+        # 新增：准备原始消息列表
+        history_messages = [(m.role, m.content) for m in request.messages]
         res = chat_once(
             question=user_query,
             round_index=round_index,
             state_summary=context_summary,
-
-            last_turn_had_question=last_turn_had_question,
             memory_bullets=memory_bullets,
             fewshots=fewshots,
+            history_messages=history_messages
         )
         answer = res["answer"]
         dbg = res.get("debug", {})
-        logging.info(f"🧩 [编排] {dbg}")
+
+
+        # 分开展示 analysis 和 final_prompt_preview
+        analysis = dbg.get('analysis') if isinstance(dbg, dict) else None
+        final_prompt_preview = dbg.get('final_prompt_preview') if isinstance(dbg, dict) else None
 
         # 更新当前轮次到对话历史（用户输入 + AI回复）
         state.update_message("user", user_query)
@@ -644,10 +644,19 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
         finally:
             db.close()
 
+        # 修复 answer 字段类型，保证为字符串
+        raw_answer = res["answer"]
+        if isinstance(raw_answer, dict):
+            answer = raw_answer.get("answer", "")
+        else:
+            answer = raw_answer
+        # 去除首尾引号
+        if isinstance(answer, str) and len(answer) >= 2 and answer[0] == answer[-1] and answer[0] in ['"', '“', '”', "'"]:
+            answer = answer[1:-1]
         return {
             "response": {
                 "answer": answer,  # AI生成的回复
-                "references": [],  # 引用信息（当前为空）
+                "references": [],  # 保持前端兼容，返回空数组
                 "user_heart": current_heart  # 返回用户剩余heart值
             }
         }

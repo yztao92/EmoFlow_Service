@@ -53,7 +53,6 @@ def chat_with_llm(prompt: str) -> Dict[str, Any]:
         qwen_llm = get_qwen_llm()
         response_text = qwen_llm._call([HumanMessage(content=prompt)])
         
-        logging.info(f"✅ 千问LLM调用成功，生成长度: {len(response_text)}")
         return {"answer": response_text}
         
     except Exception as e:
@@ -82,7 +81,6 @@ def chat_with_qwen_llm(prompt: str) -> Dict[str, Any]:
         qwen_llm = get_qwen_llm()
         response_text = qwen_llm._call([HumanMessage(content=prompt)])
         
-        logging.info(f"✅ 千问LLM调用成功，生成长度: {len(response_text)}")
         return {"answer": response_text}
         
     except Exception as e:
@@ -103,7 +101,6 @@ def chat_with_deepseek_llm(prompt: str) -> Dict[str, Any]:
         deepseek_llm = get_deepseek_llm()
         response_text = deepseek_llm._call([HumanMessage(content=prompt)])
         
-        logging.info(f"✅ DeepSeek LLM调用成功，生成长度: {len(response_text)}")
         return {"answer": response_text}
         
     except Exception as e:

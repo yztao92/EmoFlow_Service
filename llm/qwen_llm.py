@@ -40,7 +40,7 @@ class QwenLLM:
         self.api_url = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
         self.model = "qwen-plus"  # 使用的模型名称
         
-        logger.info(f"✅ 千问LLM初始化成功: {self.model}")
+        # logger.info(f"✅ 千问LLM初始化成功: {self.model}")
     
     def _call(self, messages: List[BaseMessage]) -> str:
         """
@@ -67,7 +67,7 @@ class QwenLLM:
             # 解析响应
             if response and "output" in response:
                 reply = response["output"]["text"]
-                logger.info(f"✅ 千问API调用成功，生成长度: {len(reply)}")
+                # logger.info(f"✅ 千问API调用成功，生成长度: {len(reply)}")
                 return reply
             else:
                 logger.error(f"❌ 千问API 响应格式异常: {response}")
@@ -151,8 +151,8 @@ class QwenLLM:
             )
             
             # 打印调试信息
-            logger.info(f"🔍 千问API请求URL: {self.api_url}")
-            logger.info(f"🔍 千问API响应状态: {response.status_code}")
+            # logger.info(f"🔍 千问API请求URL: {self.api_url}")
+            # logger.info(f"🔍 千问API响应状态: {response.status_code}")
             
             response.raise_for_status()
             return response.json()

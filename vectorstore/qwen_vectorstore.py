@@ -40,8 +40,8 @@ class QwenVectorStore:
                 raise FileNotFoundError(f"FAISS向量库文件不存在: {self.faiss_path}")
             
             self.index = faiss.read_index(self.faiss_path)
-            logging.info(f"✅ FAISS向量库加载成功: {self.faiss_path}")
-            logging.info(f"📊 向量库信息: {self.index.ntotal} 个向量, 维度: {self.index.d}")
+            # logging.info(f"✅ FAISS向量库加载成功: {self.faiss_path}")
+            # logging.info(f"📊 向量库信息: {self.index.ntotal} 个向量, 维度: {self.index.d}")
             
         except Exception as e:
             logging.error(f"❌ FAISS向量库加载失败: {e}")
@@ -58,8 +58,8 @@ class QwenVectorStore:
             cursor = self.metadata_conn.cursor()
             cursor.execute("SELECT COUNT(*) FROM metadata")
             count = cursor.fetchone()[0]
-            logging.info(f"✅ 元数据库加载成功: {self.metadata_path}")
-            logging.info(f"📊 元数据记录数: {count}")
+            # logging.info(f"✅ 元数据库加载成功: {self.metadata_path}")
+            # logging.info(f"📊 元数据记录数: {count}")
             
         except Exception as e:
             logging.error(f"❌ 元数据库加载失败: {e}")
@@ -73,7 +73,7 @@ class QwenVectorStore:
             embedding_model: 千问embedding模型实例
         """
         self.embedding_model = embedding_model
-        logging.info("✅ Embedding模型设置成功")
+        # logging.info("✅ Embedding模型设置成功")
     
     def search(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
         """
@@ -136,9 +136,9 @@ class QwenVectorStore:
         # 按相似度排序
         results.sort(key=lambda x: x['similarity'], reverse=True)
         
-        logging.info(f"🔍 检索完成: 查询='{query[:50]}...', 返回 {len(results)} 个结果")
-        for i, result in enumerate(results[:3]):  # 只记录前3个结果
-            logging.info(f"  {i+1}. 相似度 {result['similarity']:.3f} - {result['title'][:50]}...")
+        # logging.info(f"🔍 检索完成: 查询='{query[:50]}...', 返回 {len(results)} 个结果")
+        # for i, result in enumerate(results[:3]):  # 只记录前3个结果
+        #     logging.info(f"  {i+1}. 相似度 {result['similarity']:.3f} - {result['title'][:50]}...")
         
         return results
     
@@ -180,7 +180,7 @@ class QwenVectorStore:
         """关闭数据库连接"""
         if self.metadata_conn:
             self.metadata_conn.close()
-            logging.info("✅ 元数据库连接已关闭")
+            # logging.info("✅ 元数据库连接已关闭")
 
 # 全局向量库实例
 _qwen_vectorstore = None
