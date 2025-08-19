@@ -1,6 +1,7 @@
-# prompts/chat_analysis.py
+# File: prompts/chat_analysis.py
 import json
 import logging
+import re
 from typing import Dict, Any, Optional
 from llm.llm_factory import chat_with_llm
 
@@ -21,20 +22,8 @@ ANALYZE_PROMPT = """
   "intent": "求建议|求安慰|闲聊|叙事|宣泄",
   "ask_slot": "gentle|reflect|none",
   "need_rag": true|false,
-  "rag_queries": ["..."]     // need_rag=false 时给 []
+  "rag_queries": ["..."]
 }}
-
-# 判定标准（请据此做判断）
-- valence：整体情感极性。积极（赞美/感谢/庆祝/满足），消极（痛苦/抱怨/恐惧/愤怒），否则中性。
-- intensity：情绪强度。依据夸张副词（非常、太、特别）、叹号/连续短句、第一人称强烈感受词（受不了/崩溃/激动）、生理线索（哭、失眠）、语速感。强→high；轻→low；否则 medium。
-- dominance：掌控感。表达“我能…/已解决/有计划/已采取行动”→high；明显无助/被动/求救→low；其余 medium。
-- emotion_label：更细情绪词，用常识映射（幸福/开心→happiness；难过/流泪→sadness；生气→anger；平静→calm；焦虑→anxious；害怕→fear；疲惫→tired；孤独→lonely …）。
-- intent：明确求方法/建议→求建议；希望被理解/安慰→求安慰；叙述事件/讲经过→叙事；主要发泄/吐槽→宣泄；随意社交→闲聊。
-- ask_slot：若对方需要被接住或梳理→reflect（先简短反馈再轻问）；轻触达成延续→gentle；不应提问（如已要收尾/明确拒绝）→none。
-- need_rag：仅当回答需要外部事实/步骤/概念解释时为 true（如“如何办理…/X 的原理/定义/对比/步骤清单”）。
-- rag_queries：≤3 条，名词化、可检索、简短；need_rag=false 时返回 []。
-
-# 输出要求：仅返回 JSON 对象，不要多余文本。
 """
 
 _ALLOWED = {
@@ -49,6 +38,44 @@ def _clamp(v: str, key: str, default: str) -> str:
     if not isinstance(v, str):
         return default
     return v if v in _ALLOWED[key] else default
+
+# ===== 稳健的 JSON 抽取器 =====
+def _extract_json_obj(text: str) -> dict:
+    if not isinstance(text, str) or not text.strip():
+        return {}
+    s = text.strip()
+
+    if s.startswith("```"):
+        s = re.sub(r"^```[a-zA-Z]*\s*", "", s)
+        s = re.sub(r"\s*```$", "", s).strip()
+
+    if s.startswith("{") and s.endswith("}"):
+        try:
+            d = json.loads(s)
+            if isinstance(d, dict):
+                return {k.strip(): v for k, v in d.items()}
+            return d
+        except Exception:
+            pass
+
+    m = re.search(r"\{.*\}", s, flags=re.DOTALL)
+    if not m:
+        return {}
+    candidate = m.group(0)
+
+    end_idx = len(candidate)
+    while end_idx > 0:
+        chunk = candidate[:end_idx].strip()
+        if chunk.endswith("}"):
+            try:
+                d = json.loads(chunk)
+                if isinstance(d, dict):
+                    return {k.strip(): v for k, v in d.items()}
+                return d
+            except Exception:
+                pass
+        end_idx -= 1
+    return {}
 
 # ===== 规则机：stage =====
 def infer_stage(
@@ -72,18 +99,13 @@ def infer_stage(
         return "wrap"
 
     stage = "mid"
-
-    # 负向强情绪从 wrap/None 回暖以先接住
     if emotion_label in ("sadness","tired","lonely","fear","anxious","anger") and last_stage in (None,"wrap"):
         stage = "warmup"
-
-    # 强情绪但非工具性诉求，且能量下降时可提前收束
     if intensity == "low" and intent not in ("求建议","宣泄"):
         stage = "wrap"
-
     return stage
 
-# ===== pace：由 stage + intensity 自动推断（不从 LLM 获取） =====
+# ===== pace =====
 def auto_pace(stage:str, intensity:str) -> str:
     if stage == "wrap":
         return "slow"
@@ -93,7 +115,7 @@ def auto_pace(stage:str, intensity:str) -> str:
         return "slow"
     return "normal"
 
-# ===== reply_length：按 stage 自动；mid 某些条件触发 detailed =====
+# ===== reply_length =====
 def map_reply_length(stage:str, intent:str, intensity:str, question:str) -> str:
     base = "short" if stage in ("warmup","wrap") else "medium"
     want_detail = any(k in (question or "") for k in ("详细","展开","具体点","多给些","多一点","为什么","原理","步骤"))
@@ -119,32 +141,40 @@ def analyze_turn(
     }
     raw = chat_with_llm(ANALYZE_PROMPT.format(**payload))
 
-    # 兜底
+    # 初始兜底
     res: Dict[str,Any] = {
         "valence": "neutral",
         "intensity": "medium",
         "dominance": "medium",
         "emotion_label": "calm",
-
-        # 下面这些由本地规则机/派生计算
         "stage": "warmup" if round_index <= 2 else ("mid" if round_index <= 6 else "wrap"),
         "intent": "闲聊",
         "ask_slot": "gentle",
         "need_rag": False,
         "rag_queries": [],
-
         "pace": "normal",
         "style": "direct",
         "reply_length": "short",
     }
 
-    # 解析 LLM（仅上述 8 个字段）
     try:
-        cand = json.loads(raw) if isinstance(raw, str) else (raw if isinstance(raw, dict) else {})
-        if isinstance(cand, dict):
-            res.update({k: cand.get(k, res[k]) for k in ("valence","intensity","dominance","emotion_label","intent","ask_slot","need_rag","rag_queries")})
+        cand = {}
+        if isinstance(raw, dict):
+            if "answer" in raw and isinstance(raw["answer"], str):
+                cand = _extract_json_obj(raw["answer"])
+            else:
+                cand = {k: v for k, v in raw.items() if isinstance(v, (str, bool, list))}
+        elif isinstance(raw, str):
+            cand = _extract_json_obj(raw)
+
+        if isinstance(cand, dict) and cand:
+            for k in ("valence","intensity","dominance","emotion_label","intent","ask_slot","need_rag","rag_queries"):
+                if k in cand:
+                    res[k] = cand[k]
+        else:
+            logging.warning("🧠 [分析] 未提取到有效 JSON，使用兜底参数")
     except Exception as e:
-        logging.error("🧠 [分析] JSON 解析失败 → %s", e, exc_info=True)
+        logging.warning(f"🧠 [分析] JSON 解析异常：{e}")
 
     # 正向情绪快速兜底
     q = (question or "")[:200]
@@ -160,10 +190,11 @@ def analyze_turn(
     res["ask_slot"]  = _clamp(res.get("ask_slot"),  "ask_slot",  "gentle")
     res["need_rag"]  = bool(res.get("need_rag"))
     rqs = res.get("rag_queries") or []
-    if not isinstance(rqs, list): rqs = []
+    if not isinstance(rqs, list):
+        rqs = []
     res["rag_queries"] = [str(s).strip()[:60] for s in rqs[:3]] if res["need_rag"] else []
 
-    # 规则机最终确定 stage
+    # 最终规则机
     res["stage"] = infer_stage(
         round_index=round_index,
         intent=res["intent"],
@@ -174,22 +205,40 @@ def analyze_turn(
         last_stage=last_stage,
         intensity=res["intensity"],
     )
-
-    # 收尾强约束
     if res["stage"] == "wrap":
         res["ask_slot"] = "none"
 
-    # 由参数自动判定 pace（stage+intensity）
+    # 派生字段
     res["pace"] = auto_pace(res["stage"], res["intensity"])
-
-    # 反思式优先（mid & 求建议/叙事）
     if res["stage"] == "mid" and res["intent"] in ("求建议","叙事") and res["ask_slot"] == "gentle":
         res["ask_slot"] = "reflect"
-
-    # style：简单基调（可按你系统风格替换）
-    res["style"] = "warm" if res["valence"] == "positive" else ("empathetic" if res["emotion_label"] in ("sadness","tired","lonely","fear","anxious","anger") else "direct")
-
-    # reply_length：自动+条件 detailed
+    res["style"] = "warm" if res["valence"] == "positive" else (
+        "empathetic" if res["emotion_label"] in ("sadness","tired","lonely","fear","anxious","anger") else "direct"
+    )
     res["reply_length"] = map_reply_length(res["stage"], res["intent"], res["intensity"], question or "")
+
+    # —— 保底补齐所有字段 —— #
+    required_defaults = {
+        "stage": "warmup",
+        "intent": "闲聊",
+        "valence": "neutral",
+        "intensity": "medium",
+        "dominance": "medium",
+        "emotion_label": "calm",
+        "ask_slot": "gentle",
+        "need_rag": False,
+        "rag_queries": [],
+        "pace": "normal",
+        "style": "direct",
+        "reply_length": "short",
+    }
+    for k, v in required_defaults.items():
+        if k not in res or res[k] is None:
+            res[k] = v
+
+    try:
+        logging.info("[ANALYSIS_READY] %s", json.dumps(res, ensure_ascii=False))
+    except Exception:
+        pass
 
     return res

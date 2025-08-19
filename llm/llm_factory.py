@@ -3,7 +3,7 @@
 # 实现：提供统一的LLM接口，支持多种LLM模型
 
 import logging
-from typing import Dict, Any
+from typing import Dict, Any, Callable
 from langchain_core.messages import HumanMessage
 
 # 导入LLM包装器
@@ -26,26 +26,31 @@ def get_qwen_llm() -> QwenLLM:
         _qwen_llm = QwenLLM()
     return _qwen_llm
 
+def _call_to_str(call_fn: Callable[[str], Any], prompt: str) -> str:
+    """统一把模型输出转成字符串，避免上游类型不一致"""
+    out = call_fn(prompt)
+    return out if isinstance(out, str) else str(out)
+
 # === 生成链路共用：返回【纯字符串】 ===
 def chat_with_llm(prompt: str) -> str:
     """
     统一的LLM调用接口（默认使用千问LLM）
-    返回：纯字符串，便于上游直接使用
+    返回：纯字符串
     """
     try:
-        qwen_llm = get_qwen_llm()
-        response_text = qwen_llm._call([HumanMessage(content=prompt)])
-        return response_text if isinstance(response_text, str) else str(response_text)
+        qwen = get_qwen_llm()
+        return _call_to_str(lambda p: qwen._call([HumanMessage(content=p)]), prompt)
     except Exception as e:
-        logging.error(f"❌ 千问LLM调用失败: {e}")
-        # 备用：DeepSeek
+        logging.error("❌ 千问LLM调用失败：%s", e)
+
+        # 兜底重试 DeepSeek
         try:
-            deepseek_llm = get_deepseek_llm()
-            response_text = deepseek_llm._call([HumanMessage(content=prompt)])
-            logging.info(f"✅ DeepSeek备用LLM调用成功，生成长度: {len(response_text) if isinstance(response_text, str) else 'unknown'}")
-            return response_text if isinstance(response_text, str) else str(response_text)
+            deepseek = get_deepseek_llm()
+            resp = _call_to_str(lambda p: deepseek._call([HumanMessage(content=p)]), prompt)
+            logging.info("✅ 使用 DeepSeek 作为备用成功，长度=%d", len(resp))
+            return resp
         except Exception as backup_e:
-            logging.error(f"❌ 备用DeepSeek LLM也失败: {backup_e}")
+            logging.error("❌ 备用 DeepSeek 也失败：%s", backup_e)
             return "抱歉，我现在无法生成回复，请稍后再试。"
 
 # === 日记模块用：保持【dict】返回，兼容原有调用 ===
@@ -54,11 +59,11 @@ def chat_with_qwen_llm(prompt: str) -> Dict[str, Any]:
     千问LLM调用接口（返回 dict，包含 answer 字段）
     """
     try:
-        qwen_llm = get_qwen_llm()
-        response_text = qwen_llm._call([HumanMessage(content=prompt)])
-        return {"answer": response_text if isinstance(response_text, str) else str(response_text)}
+        qwen = get_qwen_llm()
+        resp = _call_to_str(lambda p: qwen._call([HumanMessage(content=p)]), prompt)
+        return {"answer": resp}
     except Exception as e:
-        logging.error(f"❌ 千问LLM调用失败: {e}")
+        logging.error("❌ 千问LLM调用失败：%s", e)
         return {"answer": "抱歉，我现在无法生成回复，请稍后再试。"}
 
 def chat_with_deepseek_llm(prompt: str) -> str:
@@ -66,9 +71,8 @@ def chat_with_deepseek_llm(prompt: str) -> str:
     DeepSeek LLM调用接口（返回纯字符串，以便通用）
     """
     try:
-        deepseek_llm = get_deepseek_llm()
-        response_text = deepseek_llm._call([HumanMessage(content=prompt)])
-        return response_text if isinstance(response_text, str) else str(response_text)
+        deepseek = get_deepseek_llm()
+        return _call_to_str(lambda p: deepseek._call([HumanMessage(content=p)]), prompt)
     except Exception as e:
-        logging.error(f"❌ DeepSeek LLM调用失败: {e}")
+        logging.error("❌ DeepSeek LLM调用失败：%s", e)
         return "抱歉，我现在无法生成回复，请稍后再试。"
