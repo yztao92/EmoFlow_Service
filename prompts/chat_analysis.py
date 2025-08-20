@@ -13,15 +13,68 @@ ANALYZE_PROMPT = """
 - history: {state_summary}
 - question: {question}
 
-# 需要你输出（仅这些键）：
+# 字段说明（判定标准）
+
+- valence (情感效价):
+  - "positive" → 用户表达愉快、幸福、满足
+  - "neutral"  → 用户表达平静、叙事、客观
+  - "negative" → 用户表达悲伤、生气、焦虑、孤独等
+
+- intensity (情绪强度):
+  - "high"   → 明显强烈的情绪爆发或持续强调
+  - "medium" → 有一定情绪，但相对克制
+  - "low"    → 情绪轻微或不明显
+
+- dominance (掌控感):
+  - "high"   → 用户表现出控制感、积极主动
+  - "medium" → 部分掌控，但有不确定或求助
+  - "low"    → 明显失控、无助、被动
+
+- emotion_label (具体情绪标签):
+  从以下中选最贴近的一个：
+  ["happiness","sadness","anger","calm","fear","tired","anxious","surprised","lonely"]
+
+- intent (意图类型):
+  - "求建议" → 用户希望得到方案或建议
+  - "求安慰" → 用户希望得到理解、共情、安慰
+  - "闲聊"   → 普通聊天、没有特定目标
+  - "叙事"   → 主要在讲述事情经过
+  - "宣泄"   → 明显情绪释放或抱怨，不求解决
+
+- ask_slot (回答中是否需要提问，以及提问方式):
+  用途：指示在生成 AI 回复时，是否需要针对用户最新输入附带一个提问，引导后续对话。
+
+  - "gentle"  
+    → 需要提问；形式是温和、开放式问题，让用户可以自由选择是否继续分享。  
+    → 常见场景：用户刚表达完一种情绪，需要轻轻引导他展开。  
+    → 例：「你想从哪个方面说起呢？」、「最近心情波动多吗？」
+
+  - "reflect"  
+    → 需要提问；在提问前，先反馈用户的情绪，再轻轻补充一个问题，引导用户进一步补充细节。  
+    → 常见场景：用户明确透露情绪或故事，但信息不完整。  
+    → 例：「听起来你挺难过的，你觉得最让你心累的是哪一部分？」
+
+  - "none"  
+    → 不需要提问；只需回应、共情或自然收束，不再追问。  
+    → 常见场景：用户已经得到回应，或对话进入收尾，不适合继续提问。
+
+- need_rag:
+  - true  → 用户在问知识/经验类问题，需要外部知识
+  - false → 普通情绪交流或生活琐事，不需要外部知识
+
+- rag_queries:
+  - 如果 need_rag=true，请给出1-2条检索查询关键词
+  - 否则输出 []
+
+# 严格输出 JSON，格式如下：
 {{
-  "valence": "positive|neutral|negative",
-  "intensity": "high|medium|low",
-  "dominance": "high|medium|low",
-  "emotion_label": "happiness|sadness|anger|calm|fear|tired|anxious|surprised|lonely|...",
-  "intent": "求建议|求安慰|闲聊|叙事|宣泄",
-  "ask_slot": "gentle|reflect|none",
-  "need_rag": true|false,
+  "valence": "...",
+  "intensity": "...",
+  "dominance": "...",
+  "emotion_label": "...",
+  "intent": "...",
+  "ask_slot": "...",
+  "need_rag": true/false,
   "rag_queries": ["..."]
 }}
 """
@@ -41,43 +94,53 @@ def _clamp(v: str, key: str, default: str) -> str:
 
 # ===== 稳健的 JSON 抽取器 =====
 def _extract_json_obj(text: str) -> dict:
+    """
+    从 LLM 返回中提取首个 JSON 对象（容错 markdown 代码块与噪声）。
+    """
     if not isinstance(text, str) or not text.strip():
         return {}
     s = text.strip()
 
+    # 去除 markdown 包裹 ```
     if s.startswith("```"):
         s = re.sub(r"^```[a-zA-Z]*\s*", "", s)
         s = re.sub(r"\s*```$", "", s).strip()
 
+    # 直接 JSON
     if s.startswith("{") and s.endswith("}"):
         try:
             d = json.loads(s)
-            if isinstance(d, dict):
-                return {k.strip(): v for k, v in d.items()}
-            return d
+            return d if isinstance(d, dict) else {}
         except Exception:
             pass
 
+    # 提取第一个 {...}
     m = re.search(r"\{.*\}", s, flags=re.DOTALL)
     if not m:
         return {}
     candidate = m.group(0)
 
+    # 从右往左收缩直至能 loads
     end_idx = len(candidate)
     while end_idx > 0:
         chunk = candidate[:end_idx].strip()
         if chunk.endswith("}"):
             try:
                 d = json.loads(chunk)
-                if isinstance(d, dict):
-                    return {k.strip(): v for k, v in d.items()}
-                return d
+                return d if isinstance(d, dict) else {}
             except Exception:
                 pass
         end_idx -= 1
     return {}
 
-# ===== 规则机：stage =====
+# ===== 极简 new_topic 判定（行业主流） =====
+def is_new_topic(round_index:int, last_stage:Optional[str]) -> bool:
+    # 首轮必为新话题；上轮是 wrap 后用户再开口，也视为新话题
+    if round_index <= 1:
+        return True
+    return (last_stage == "wrap")
+
+# ===== 极简 stage 判定（行业主流：轮次主导 + 轻兜底） =====
 def infer_stage(
     round_index:int,
     intent:str,
@@ -89,21 +152,23 @@ def infer_stage(
     last_stage:Optional[str]=None,
     intensity:str="medium",
 ) -> str:
-    if new_topic:
-        return "warmup"
+    """
+    最小可用：基于轮次 + 少量兜底
+    行业内主流：1-2轮=warmup；3-5轮=mid；6轮+=wrap
+    """
+    # 显式信号优先
     if explicit_close or target_resolved:
         return "wrap"
+    # 新话题回到 warmup（哪怕轮次高）
+    if new_topic:
+        return "warmup"
+
+    # 轮次主导
     if round_index <= 2:
         return "warmup"
-    if round_index >= 7:
+    if round_index >= 6:
         return "wrap"
-
-    stage = "mid"
-    if emotion_label in ("sadness","tired","lonely","fear","anxious","anger") and last_stage in (None,"wrap"):
-        stage = "warmup"
-    if intensity == "low" and intent not in ("求建议","宣泄"):
-        stage = "wrap"
-    return stage
+    return "mid"
 
 # ===== pace =====
 def auto_pace(stage:str, intensity:str) -> str:
@@ -131,15 +196,18 @@ def analyze_turn(
     *,
     last_stage:Optional[str]=None,
     explicit_close:bool=False,
-    new_topic:bool=False,
+    new_topic:Optional[bool]=None,
     target_resolved:bool=False
 ) -> Dict[str,Any]:
+    """
+    返回结构包含：stage/intent/valence/intensity/dominance/emotion_label/ask_slot/need_rag/rag_queries/pace/style/reply_length
+    """
     payload = {
         "round_index": round_index,
         "state_summary": state_summary or "",
         "question": question or "",
     }
-    raw = chat_with_llm(ANALYZE_PROMPT.format(**payload))
+    raw = chat_with_llm(ANALYZE_PROMPT.format(**payload))  # chat_with_llm 必须返回纯字符串
 
     # 初始兜底
     res: Dict[str,Any] = {
@@ -147,7 +215,7 @@ def analyze_turn(
         "intensity": "medium",
         "dominance": "medium",
         "emotion_label": "calm",
-        "stage": "warmup" if round_index <= 2 else ("mid" if round_index <= 6 else "wrap"),
+        "stage": "warmup" if round_index <= 2 else ("mid" if round_index <= 5 else "wrap"),
         "intent": "闲聊",
         "ask_slot": "gentle",
         "need_rag": False,
@@ -157,6 +225,7 @@ def analyze_turn(
         "reply_length": "short",
     }
 
+    # 稳健解析
     try:
         cand = {}
         if isinstance(raw, dict):
@@ -194,17 +263,25 @@ def analyze_turn(
         rqs = []
     res["rag_queries"] = [str(s).strip()[:60] for s in rqs[:3]] if res["need_rag"] else []
 
-    # 最终规则机
+    # 极简 new_topic（若调用方没传，则内部判定）
+    if new_topic is None:
+        new_topic_flag = is_new_topic(round_index, last_stage)
+    else:
+        new_topic_flag = bool(new_topic)
+
+    # 最终 stage 判定
     res["stage"] = infer_stage(
         round_index=round_index,
         intent=res["intent"],
         emotion_label=res.get("emotion_label",""),
         explicit_close=explicit_close,
-        new_topic=new_topic,
+        new_topic=new_topic_flag,
         target_resolved=target_resolved,
         last_stage=last_stage,
         intensity=res["intensity"],
     )
+
+    # 收尾强约束
     if res["stage"] == "wrap":
         res["ask_slot"] = "none"
 
@@ -217,7 +294,7 @@ def analyze_turn(
     )
     res["reply_length"] = map_reply_length(res["stage"], res["intent"], res["intensity"], question or "")
 
-    # —— 保底补齐所有字段 —— #
+    # 保底补齐
     required_defaults = {
         "stage": "warmup",
         "intent": "闲聊",
@@ -235,10 +312,5 @@ def analyze_turn(
     for k, v in required_defaults.items():
         if k not in res or res[k] is None:
             res[k] = v
-
-    try:
-        logging.info("[ANALYSIS_READY] %s", json.dumps(res, ensure_ascii=False))
-    except Exception:
-        pass
 
     return res

@@ -35,6 +35,7 @@ def chat_once(analysis: dict, state_summary: str, question: str) -> str:
             state_summary,
             question
         )
+        logging.info("[DEBUG] 最终拼接的 prompt:\n%s", final_prompt)
         logging.info("[DEBUG] final_prompt 构建成功")
     except Exception as e:
         logging.error(f"[DEBUG] build_final_prompt 报错: {e}")

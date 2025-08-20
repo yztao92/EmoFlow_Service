@@ -27,25 +27,19 @@ def build_final_prompt(ana: Dict[str, Any], state_summary: str, question: str) -
 # 角色
 {ROLE_DEFINITION}
 
-# 对话上下文
-- 阶段: {spec.stage}；意图: {spec.intent}；情感: {spec.valence}/{spec.emotion_label}
-- 节奏: {spec.pace}；篇幅: {spec.reply_length}
-
-# 生成规范
-{guide}
-
-# 检索参考（如有）
-{rag_block}
-
-# 对话历史（摘要）
+# 对话历史
 {state_summary}
 
 # 用户当前输入
 {question}
 
-# 开场/过渡句（只做参考，不要直接用）
+# 生成回答规范
+{guide}
+
+# 检索参考（如有）
+{rag_block}
+
+# 开场/过渡句（不要直接用，用自然的语气改写）
 {opener}
 
-# 输出要求
-- 严格遵守篇幅与结构；一次成型，不写自我描述。
 """
