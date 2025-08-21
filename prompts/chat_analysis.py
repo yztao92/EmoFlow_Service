@@ -6,74 +6,88 @@ from typing import Dict, Any, Optional
 from llm.llm_factory import chat_with_llm
 
 ANALYZE_PROMPT = """
-你是对话分析器。阅读给定对话，只输出严格 JSON（不要多余文字、不要注释）。
+你是对话分析器，用于帮助我判断用户当前对话状态，以便更好地回应用户。
 
-# 对话
-- round_index: {round_index}
-- history: {state_summary}
-- question: {question}
+你的任务是：根据用户最后一句输入和上下文，提取结构化字段，辅助 LLM 决定语气、节奏、结构和是否需要外部信息。
 
-# 字段说明（判定标准）
+⚠️ 要求：
+- 输出必须为严格 JSON 格式（不要注释、不要多余解释）
+- 所有字段都必须输出，值必须在规定范围内
+- 遇到模糊语境时，请合理推断最可能值，不要留空
 
-- valence (情感效价):
-  - "positive" → 用户表达愉快、幸福、满足
-  - "neutral"  → 用户表达平静、叙事、客观
-  - "negative" → 用户表达悲伤、生气、焦虑、孤独等
+---
 
-- intensity (情绪强度):
-  - "high"   → 明显强烈的情绪爆发或持续强调
-  - "medium" → 有一定情绪，但相对克制
-  - "low"    → 情绪轻微或不明显
+# 对话信息（供你分析）
+- 对话轮次: {round_index}
+- 上下文: {state_summary}
+- 最后一句输入: {question}
 
-- dominance (掌控感):
-  - "high"   → 用户表现出控制感、积极主动
-  - "medium" → 部分掌控，但有不确定或求助
-  - "low"    → 明显失控、无助、被动
+# 输出字段说明：
 
-- emotion_label (具体情绪标签):
-  从以下中选最贴近的一个：
-  ["happiness","sadness","anger","calm","fear","tired","anxious","surprised","lonely"]
+- valence（情感效价）：
+  - "positive" → 表达愉快、幸福、满足
+  - "neutral" → 语气平和、客观描述
+  - "negative" → 表达悲伤、生气、焦虑、孤独等
 
-- intent (意图类型):
-  - "求建议" → 用户希望得到方案或建议
-  - "求安慰" → 用户希望得到理解、共情、安慰
-  - "闲聊"   → 普通聊天、没有特定目标
-  - "叙事"   → 主要在讲述事情经过
-  - "宣泄"   → 明显情绪释放或抱怨，不求解决
+- intensity（情绪强度）：
+  - "high" → 强烈表达情绪或反复强调
+  - "medium" → 有明显情绪但不激烈
+  - "low" → 情绪轻微或不明显
 
-- ask_slot (回答中是否需要提问，以及提问方式):
-  用途：指示在生成 AI 回复时，是否需要针对用户最新输入附带一个提问，引导后续对话。
+- dominance（掌控感）：
+  - "high" → 表现出积极、掌控局面
+  - "medium" → 有一定主动性，但也存在不确定
+  - "low" → 显得被动、迷茫、失控
 
-  - "gentle"  
-    → 需要提问；形式是温和、开放式问题，让用户可以自由选择是否继续分享。  
-    → 常见场景：用户刚表达完一种情绪，需要轻轻引导他展开。  
-    → 例：「你想从哪个方面说起呢？」、「最近心情波动多吗？」
+- emotion_label（具体情绪标签）：
+  从以下中选择最贴近的一个：
+  ["happiness", "sadness", "anger", "calm", "fear", "tired", "anxious", "surprised", "lonely"]
 
-  - "reflect"  
-    → 需要提问；在提问前，先反馈用户的情绪，再轻轻补充一个问题，引导用户进一步补充细节。  
-    → 常见场景：用户明确透露情绪或故事，但信息不完整。  
-    → 例：「听起来你挺难过的，你觉得最让你心累的是哪一部分？」
+- intent（用户表达目的）：
+  - "求建议" → 希望获取建议或解决方案
+  - "求安慰" → 寻求情感支持或理解
+  - "闲聊" → 普通交流，没有明确目标
+  - "叙事" → 讲述事情或经历
+  - "宣泄" → 情绪释放，不期待回应
 
-  - "none"  
-    → 不需要提问；只需回应、共情或自然收束，不再追问。  
-    → 常见场景：用户已经得到回应，或对话进入收尾，不适合继续提问。
+- question_intent（是否在主动提问）：
+  - true / false
 
-- need_rag:
-  - true  → 用户在问知识/经验类问题，需要外部知识
-  - false → 普通情绪交流或生活琐事，不需要外部知识
+- end_intent（是否有结束表达倾向）：
+  - true / false
 
-- rag_queries:
-  - 如果 need_rag=true，请给出1-2条检索查询关键词
-  - 否则输出 []
+- info_saturation（信息饱和度）：
+  - "low" → 用户期待更多解释或信息
+  - "medium" → 信息吸收正常
+  - "high" → 表达“太复杂”、“太多了”、“搞不懂”等负担感
 
-# 严格输出 JSON，格式如下：
+- user_energy（表达能量）：
+  - "high" → 表达意愿强、节奏快
+  - "medium" → 表达正常
+  - "low" → 表达疲软、简短、断句
+
+- response_acceptance（对引导的接受度）：
+  - "open" → 表达愿意继续回应、互动
+  - "neutral" → 中立，没有明显倾向
+  - "resistant" → 不愿展开、不想回应
+
+- need_rag（是否需要外部知识）：
+  - true / false
+
+- rag_queries（若 need_rag 为 false，输出 []）
+
+# 输出格式示例（务必完整合法）：
 {{
   "valence": "...",
   "intensity": "...",
   "dominance": "...",
   "emotion_label": "...",
   "intent": "...",
-  "ask_slot": "...",
+  "question_intent": true/false,
+  "end_intent": true/false,
+  "info_saturation": "...",
+  "user_energy": "...",
+  "response_acceptance": "...",
   "need_rag": true/false,
   "rag_queries": ["..."]
 }}
