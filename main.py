@@ -352,13 +352,8 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
         # 6) 分析：LLM 语义 + 规则机派生
         logging.info(f"[DEBUG] 调用 analyze_turn 前: round_index={round_index}, context_summary={context_summary}, user_query={user_query}")
         analysis = analyze_turn(
-            round_index=round_index,
             state_summary=context_summary,
-            question=user_query,
-            last_stage=None,          # 如需持久化可扩展 StateTracker
-            explicit_close=explicit_close,
-            new_topic=new_topic,
-            target_resolved=target_resolved,
+            question=user_query
         )
         logging.info(f"[DEBUG] analyze_turn 返回: {analysis}")
 
