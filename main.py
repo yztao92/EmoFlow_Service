@@ -386,9 +386,10 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
 
         # 调试输出
         try:
-            logging.info(f"[ANALYSIS] stage={analysis.get('stage')} intent={analysis.get('intent')} "
-                         f"ask_slot={analysis.get('ask_slot')} pace={analysis.get('pace')} "
-                         f"reply_length={analysis.get('reply_length')}")
+            logging.info(
+                f"[ANALYSIS] stage={analysis.get('stage')} intent={analysis.get('intent')} "
+                f"guidance_type={analysis.get('guidance_type', 'affirmative')} "
+                f"pace={analysis.get('pace')} reply_length={analysis.get('reply_length')}")
         except Exception:
             pass
 
