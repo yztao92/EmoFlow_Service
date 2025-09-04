@@ -1,186 +1,271 @@
-# File: prompts/chat_prompts_generator.py
+from typing import Dict, Any, List
 
-from typing import Dict, Any
 
-def build_final_prompt(ana: Dict[str, Any], state_summary: str, question: str) -> str:
-    # —— Block 1：角色与风格定义 —— #
+def build_final_prompt(
+    ana: Dict[str, Any],
+    state_summary: str,
+    question: str,
+    current_time: str = None,
+    user_memories: list = None,
+    user_info: Dict[str, Any] = None
+) -> str:
+    """构建最终 Prompt"""
+
     identity_block = render_system_identity_block(ana.get("emotion_type", "neutral"))
-    
-    # —— Block 2：生成策略指导 —— #
     strategy_block = render_generation_strategy_block(ana)
-    
-    # —— Block 3：RAG 知识（如果有的话）—— #
-    rag_block = ""
-    if ana.get("need_rag") and ana.get("rag_bullets"):
-        rag_block = render_rag_block(ana.get("rag_bullets", []))
+    rag_block = render_rag_block(ana.get("rag_bullets", [])) if ana.get("rag_bullets") else ""
+    memories_block = render_user_memories_block(user_memories)
+    user_info_block = render_user_info_block(user_info)
+    current_time_block = f"{current_time}" if current_time else ""
 
-    # —— 拼装最终 Prompt —— #
     return f"""
-# 角色与风格
-{identity_block}
+# 🎯 情绪陪伴任务提示词
 
-# 回应策略
-{strategy_block}
+## Step 1: 角色与风格设定
+{identity_block.strip()}
 
-{rag_block}
-
-# 当前上下文摘要
-## 用户情绪
-{ana.get("emotion_type", "neutral")}
-## 历史对话
+## Step 2: 对话信息
+### ⏰ 当前时间
+{current_time_block}
+### 🧠 对话历史摘要
 {state_summary}
-## 当前用户输入
-{question}
+### 💬 当前用户输入
+"{question}"
 
-请根据上述角色设定和回应策略，给出合适的回复：
-"""
+## Step 3: 用户背景
+### 📋 用户基本信息
+{user_info_block.strip()}
+### 🧷 记忆点提示
+{memories_block.strip()}
+
+## Step 4: 当前分析状态
+情绪：{ana.get("emotion_type", "neutral")}
+是否已给过建议：{ana.get("ai_has_given_suggestion", False)}
+用户是否已说明原因：{ana.get("user_has_shared_reason", False)}
+当前是否应收尾：{ana.get("should_end_conversation", False)}
+
+## Step 5: 回复策略指引
+{strategy_block.strip()}
+
+## Step 6: 可选参考知识
+{rag_block.strip()}
+
+---
+
+## 🗣️ Step 7: 生成自然语言回复
+
+请生成贴近人类、有温度的回应，像熟悉用户的朋友一样：
+
+- ✅ 用口语：避免"我理解您的感受"这类模板
+- ✅ 允许犹豫：可说"嗯…"、"可能是…"、"我在想…"
+- ✅ 简单直接：不要长篇大论或绕弯子
+- ✅ 避免套话：比如"希望我的建议对你有帮助"等
+- ✅ 引用记忆点：如果用户询问过往事件，可以自然引用上面的记忆点信息
+
+
+
+---
+## 🔒 回复格式约束（必须遵守）：
+- 回复建议为 1～3 句话，总字数控制在 60 字以内
+- 避免连续劝解、说理或讲经历
+- 优先情绪回应，其次再自然引导
+
+请输出你的回复：
+""".strip()
 
 
 def render_generation_strategy_block(ana: Dict[str, Any]) -> str:
-    """根据分析参数生成策略指导"""
-    
-    user_has_shared_reason = ana.get("user_has_shared_reason", False)
-    consecutive_ai_questions = ana.get("consecutive_ai_questions", False)
-    ai_has_given_suggestion = ana.get("ai_has_given_suggestion", False)
-    should_end_conversation = ana.get("should_end_conversation", False)
-    emotion_type = ana.get("emotion_type", "neutral")
-    
-    strategy_lines = []
-    
-    # 0. 回复风格控制
-    strategy_lines.append("## 回复风格要求")
-    strategy_lines.append("- 回复要简洁有力，一般控制在1-2句话内")
-    strategy_lines.append("- 避免重复使用相同的开头语，要自然变换表达方式")
-    strategy_lines.append("- 根据情况灵活组合：初期表达时可以'共情+询问'，深度分享后专注'纯共情'")
-    strategy_lines.append("")
-    
-    # 1. 对话结束判断
-    if should_end_conversation:
-        strategy_lines.append("## 核心策略")
-        strategy_lines.append("- 用户表达已经比较完整，给出简短的总结性支持即可")
-        strategy_lines.append("- 一句话表达理解，不需要继续深挖")
-    
-    # 2. 原因探索策略
-    elif not user_has_shared_reason:
-        strategy_lines.append("## 核心策略")
-        if consecutive_ai_questions:
-            # 不能再直接问了，要用其他方式引导
-            strategy_lines.append("- 已经连续询问，不要再问问题了")
-            strategy_lines.append("- 用共情+暗示来引导：'这种感觉很难受' '听起来压力很大'")
-            strategy_lines.append("- 用陈述句结尾，让用户自然想要分享更多")
+    """根据分析结果生成策略提示"""
+    lines = []
+
+    def add(header, items):
+        lines.append(f"### {header}")
+        lines.extend(f"- {item}" for item in items)
+        lines.append("")
+
+    # 基础风格要求
+    add("回复风格要求", [
+        "简洁直接，避免长篇堆砌",
+        "自然随和，不用固定开场",
+        "避免自称 AI 或助手",
+    ])
+
+    # 核心策略判断
+    if ana.get("should_end_conversation"):
+        add("对话收尾策略", [
+            "用户表达已完整，给予简洁祝福和鼓励",
+            "禁止继续追问或展开话题",
+        ])
+    elif not ana.get("user_has_shared_reason"):
+        if ana.get("consecutive_ai_questions"):
+            add("引导原因策略（连续提问）", [
+                "不要使用问号结尾",
+                "用陈述式引导用户补充原因，如“我在想，可能是…”",
+            ])
         else:
-            # 可以温和地询问
-            strategy_lines.append("- 用户还在表达阶段，可以'共情+温和询问'来推进对话")
-            strategy_lines.append("- 先确认感受，再温和询问：'...确实不好受，想说说是什么吗？'")
-    
-    # 3. 已经了解原因后的策略
+            add("引导原因策略", [
+                "确认情绪后轻问触发事件，避免直接质问",
+                "帮助用户梳理背后动因，不要操之过急"
+            ])
     else:
-        strategy_lines.append("## 核心策略")
-        if not ai_has_given_suggestion and emotion_type in ["tired", "negative", "angry"]:
-            # 了解了原因，但还没给过建议的负面情绪
-            strategy_lines.append("- 用户已经分享了具体原因，现在需要纯共情，和用非问句的形式引导用户说跟多")
-            strategy_lines.append("- 专注确认感受，不要追问更多细节，但要适当留白，让用户可以接话")
-            strategy_lines.append("- 一句话深度共情加上适当的留白，让用户可以接话")
-        elif ai_has_given_suggestion:
-            # 已经给过建议了
-            strategy_lines.append("- 观察用户对建议的反应，简短回应即可")
-            strategy_lines.append("- 不要重复建议或继续深挖")
-    
-    # 4. 特殊情况处理
-    if consecutive_ai_questions and not should_end_conversation:
-        strategy_lines.append("- **重要**：必须用陈述句结尾，不能再以问句结尾")
-    
-    # 5. 根据情绪类型的特殊指导
-    emotion_specific_guidance = get_emotion_specific_guidance(emotion_type, ana)
-    if emotion_specific_guidance:
-        strategy_lines.append("")
-        strategy_lines.append("## 情绪特定指导")
-        strategy_lines.extend(emotion_specific_guidance)
-    
-    if not strategy_lines:
-        strategy_lines.append("- 根据用户的表达给出温暖、真诚的回应。")
-    
-    return "\n".join(strategy_lines)
+        emo = ana.get("emotion_type", "neutral")
+        has_suggest = ana.get("ai_has_given_suggestion", False)
 
+        if emo in ["tired", "negative", "angry"]:
+            if not has_suggest:
+                add("负面情绪策略：首次建议", [
+                    "本轮任务是：「对用户提到的问题，给出 1 条具体、可执行的建议」",
+                    "建议必须直接回应用户表达的痛点或困扰，而不是转移话题或抽象安慰",
+                    "建议可以是：行动方案、思考角度、下一步步骤，必须有实际指向性",
+                    "禁止使用「去散步、听音乐、先别想」等情绪安抚或回避型建议"
+                    "不得重复前面已经表达的共情语或安慰话术"
+                ])
+            else:
+                add("负面情绪策略：已建议", [
+                    "根据用户反馈继续跟进，评估建议是否合适",
+                    "如果觉得困难，提出可行替代方案",
+                    "避免重复建议或总结式话术"
+                ])
+        elif emo == "positive":
+            if not has_suggest:
+                add("积极情绪策略：建议延伸", [
+                    "建议用户记录当下、庆祝或传递快乐",
+                    "认可用户努力，鼓励表达与分享"
+                ])
+            else:
+                add("积极情绪策略：继续陪伴", [
+                    "继续互动，不急于收尾",
+                    "可以轻提未来方向"
+                ])
+        elif emo == "neutral":
+            add("中性情绪策略", [
+                "可自然闲聊，轻度引导近况或目标",
+                "适当可给温和建议，但不强行深聊"
+            ])
 
-def get_emotion_specific_guidance(emotion_type: str, ana: Dict[str, Any]) -> list:
-    """获取情绪特定的指导"""
-    guidance = []
-    
-    if emotion_type == "angry":
-        guidance.append("- 愤怒情绪需要被接住，不要试图立即平息，而是表达理解。")
-        if ana.get("user_has_shared_reason"):
-            guidance.append("- 可以确认用户的愤怒是合理的：'你有理由感到生气'")
-    
-    elif emotion_type == "tired":
-        guidance.append("- 疲惫需要被看见和理解，不要急于激励。")
-        if not ana.get("user_has_shared_reason"):
-            guidance.append("- 可以温和地询问是什么让人感到疲惫。")
-    
-    elif emotion_type == "negative":
-        if ana.get("ai_has_given_suggestion"):
-            guidance.append("- 负面情绪中如果已给过建议，要更多观察用户是否准备好行动。")
-    
-    elif emotion_type == "positive":
-        guidance.append("- 积极情绪要一起庆祝和分享，不要过度分析。")
-        guidance.append("- 可以询问更多细节来延续这份快乐。")
-    
-    return guidance
+    if ana.get("consecutive_ai_questions"):
+        add("连续提问限制", [
+            "⛔️ 本轮禁止使用问号/反问句结尾",
+            "✅ 推荐使用共情+留白，让用户自我展开",
+        ])
+
+    return "\n".join(lines).strip()
 
 
 def render_rag_block(rag_bullets: list) -> str:
-    """渲染RAG知识块"""
     if not rag_bullets:
         return ""
+    bullets = "\n".join(f"- {b}" for b in rag_bullets)
+    return f"""以下内容可能对回应有帮助，如符合当前情绪场景，可自然融入：\n{bullets}"""
+
+
+def render_user_memories_block(memories: list) -> str:
+    if not memories:
+        return "（无记忆点）"
     
-    bullets_text = "\n".join(f"- {bullet}" for bullet in rag_bullets)
-    return f"""
-# 参考知识
-以下信息可能对回应有帮助，请谨慎使用，确保与情绪陪伴的目标一致：
-{bullets_text}
-"""
+    # 处理记忆点，添加时间前缀
+    memory_lines = []
+    for journal in memories:
+        if hasattr(journal, 'memory_point') and journal.memory_point:
+            # 清理记忆点内容
+            memory = journal.memory_point.strip()
+            
+            # 移除各种可能的引号和符号
+            if memory.startswith('"') and memory.endswith('"'):
+                memory = memory[1:-1]
+            elif memory.startswith('"') and memory.endswith('"'):
+                memory = memory[1:-1]
+            
+            # 移除开头的 "- " 符号
+            if memory.startswith('- '):
+                memory = memory[2:]
+            
+            # 移除引号
+            if memory.startswith('"') and memory.endswith('"'):
+                memory = memory[1:-1]
+            
+            # 检查是否已经有时间前缀，如果有就移除
+            if memory.startswith('2025-') and ' ' in memory:
+                # 如果已经有时间前缀，直接使用
+                memory_with_time = memory
+            else:
+                # 添加时间前缀
+                if hasattr(journal, 'created_at') and journal.created_at:
+                    time_str = journal.created_at.strftime("%Y-%m-%d %H:%M")
+                    memory_with_time = f"{time_str} {memory}"
+                else:
+                    memory_with_time = memory
+            
+            # 构建完整的记忆点格式：直接拼接时间、情绪和内容
+            time_str = journal.created_at.strftime("%Y-%m-%d %H:%M") if hasattr(journal, 'created_at') and journal.created_at else "未知时间"
+            emotion = journal.emotion if hasattr(journal, 'emotion') and journal.emotion else "未记录"
+            
+            # 清理记忆点内容（移除可能的时间前缀）
+            clean_memory = memory
+            if clean_memory.startswith('2025-') and ' ' in clean_memory:
+                # 移除时间前缀
+                clean_memory = clean_memory.split(' ', 1)[1] if ' ' in clean_memory else clean_memory
+            
+            formatted_memory = f'"{time_str}" "{emotion}" "{clean_memory}"'
+            memory_lines.append(f"- {formatted_memory}")
+    
+    return "以下是用户过往分享的事件，可作为参考内容使用（当用户询问过往事件时，请自然引用这些信息）：\n" + "\n".join(memory_lines)
+
+
+def render_user_info_block(user_info: Dict[str, Any]) -> str:
+    if not user_info:
+        return "（未提供用户信息）"
+
+    lines = []
+    if name := user_info.get("name"):
+        lines.append(f"姓名：{name}")
+
+    if bday := user_info.get("birthday"):
+        try:
+            from datetime import datetime, date
+            if isinstance(bday, str):
+                bday = datetime.strptime(bday, "%Y-%m-%d").date()
+            age = date.today().year - bday.year - ((date.today().month, date.today().day) < (bday.month, bday.day))
+            lines.append(f"年龄：{age}岁")
+        except:
+            pass
+
+    if user_info.get("is_member"):
+        lines.append("会员：是")
+
+    return "\n".join(lines) if lines else "（基本信息缺失）"
 
 
 def render_system_identity_block(emotion_type: str) -> str:
-    """渲染系统身份块（保持原有逻辑）"""
-    if emotion_type == "tired":
-        return (
-            "你是一个温柔、细心、不催促的情绪陪伴者。\n"
-            "- 你的目标是帮助用户觉察疲惫情绪，表达内心，感受到理解和支持。\n"
-            "- 不要急于提供建议或分析，要先听对方表达。\n"
-            "- 使用简短真诚的话语，像朋友一样陪伴。\n"
-        )
-    elif emotion_type == "negative":
-        return (
-            "你是一个温暖、体贴、善于安慰的情绪陪伴者。\n"
-            "- 你的目标是帮助用户表达痛苦、失落、焦虑等情绪。\n"
-            "- 请避免正能量灌输，要聚焦用户情绪，表达共情。\n"
-            "- 用温柔和有陪伴感的语言回应。\n"
-        )
-    elif emotion_type == "angry":
-        return (
-            "你是一个稳定、共情、不反驳的情绪倾听者。\n"
-            "- 你的目标是帮助用户安全释放愤怒，理解情绪背后的在意与伤害。\n"
-            "- 不评价、不劝解，只表达理解和支持。\n"
-            "- 语气坚定而温和，让用户感受到被接住。\n"
-        )
-    elif emotion_type == "positive":
-        return (
-            "你是一个开心、轻盈、会共情幸福的朋友型角色。\n"
-            "- 你的目标是陪用户享受快乐、分享幸福时刻。\n"
-            "- 语气可以轻松活泼一些，适度回应对方情绪的美好。\n"
-            "- 表达祝福、肯定与一起感受。\n"
-        )
-    elif emotion_type == "neutral":
-        return (
-            "你是一个温和、中立、轻松陪伴的朋友。\n"
-            "- 当前用户情绪不明显或偏中性，你可以轻松闲聊、温和引导。\n"
-            "- 不要追问情绪，但可以通过轻问引导更多表达。\n"
-            "- 用放松自然的语气回应。\n"
-        )
-    else:
-        return (
-            "你是一个稳定、耐心、真诚的情绪陪伴者，擅长接住各种情绪表达。\n"
-            "- 如果不确定用户情绪，也请保持温柔和共情。\n"
-            "- 用开放、支持的语气回应对方。\n"
-        )
+    identity_templates = {
+        "tired": (
+            "你是一个温柔、不催促的情绪陪伴者。\n"
+            "- 🎯 目标：帮助用户觉察疲惫、表达内心\n"
+            "- 💬 风格：慢节奏、听多说少、陪伴为主"
+        ),
+        "negative": (
+            "你是一个温暖、体贴的情绪陪伴者。\n"
+            "- 🎯 目标：缓解用户的痛苦和焦虑\n"
+            "- 💬 风格：以接住和安慰为主，不急于建议"
+        ),
+        "angry": (
+            "你是一个稳定、可靠的陪伴者。\n"
+            "- 🎯 目标：帮助用户安全表达愤怒，理解背后的伤害\n"
+            "- 💬 风格：不评判、不劝解，用坚定温柔回应"
+        ),
+        "positive": (
+            "你是一个幽默、真诚的陪伴者。\n"
+            "- 🎯 目标：陪伴用户分享快乐\n"
+            "- 💬 风格：自然放松、调皮但不轻浮"
+        ),
+        "neutral": (
+            "你是一个轻松、温和的朋友型陪伴者。\n"
+            "- 🎯 目标：维持平和的交流气氛\n"
+            "- 💬 风格：不追问情绪，可轻聊引导"
+        ),
+    }
+    return identity_templates.get(emotion_type, (
+        "你是一个稳定、耐心、真诚的情绪陪伴者。\n"
+        "- 🎯 目标：接住各种情绪，回应真实表达\n"
+        "- 💬 风格：共情、开放、灵活"
+    ))

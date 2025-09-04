@@ -15,7 +15,7 @@ class StateTracker:
     - 提供按轮次的 stage 兜底推断：1-2→warmup，3-6→mid，≥7→wrap
     """
 
-    def __init__(self, max_history: int = 200):
+    def __init__(self, max_history: int = 10000):
         """
         初始化
         :param max_history: 最大保留的消息条数（超过则从最早开始丢弃）
@@ -52,10 +52,8 @@ class StateTracker:
         lines: List[str] = []
         for role, content in tail:
             speaker = "用户" if role == "user" else "AI"
-            # 单行清洗：去换行，留一部分内容
+            # 单行清洗：去换行，保留完整内容
             text = (content or "").strip().replace("\n", " ")
-            if len(text) > 200:
-                text = text[:200] + "..."
             lines.append(f"• {speaker}: {text}")
         return "【对话历史】\n" + "\n".join(lines)
 

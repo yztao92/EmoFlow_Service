@@ -22,6 +22,7 @@ from prompts.prompt_flow_controller import chat_once
 from prompts.chat_analysis import analyze_turn
 from dialogue.state_tracker import StateTracker
 from database_models import init_db, SessionLocal, User, Journal
+from database_models.schemas import UpdateProfileRequest
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -194,14 +195,12 @@ def get_current_user(token: str = Header(...)) -> int:
         raise HTTPException(status_code=401, detail="无效或过期的 Token")
 
 # ==================== 用户资料 ====================
-class UpdateProfileRequest(BaseModel):
-    name: Optional[str] = None
-    email: Optional[str] = None
+# 使用database_models.schemas中的UpdateProfileRequest
 
 @app.put("/user/profile")
 def update_user_profile(request: UpdateProfileRequest, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
     try:
-        logging.info(f"🔧 更新资料: user_id={user_id}, name='{request.name}', email='{request.email}'")
+        logging.info(f"🔧 更新资料: user_id={user_id}, name='{request.name}', email='{request.email}', is_member={request.is_member}, birthday={request.birthday}, membership_expires_at={request.membership_expires_at}")
         db: Session = SessionLocal()
         user = db.query(User).filter(User.id == user_id).first()
         if not user:
@@ -212,12 +211,19 @@ def update_user_profile(request: UpdateProfileRequest, user_id: int = Depends(ge
             user.name = request.name; updated = True
         if request.email is not None and request.email != user.email:
             user.email = request.email; updated = True
+        if request.is_member is not None and request.is_member != user.is_member:
+            user.is_member = request.is_member; updated = True
+        if request.birthday is not None and request.birthday != user.birthday:
+            user.birthday = request.birthday; updated = True
+
+        if request.membership_expires_at is not None and request.membership_expires_at != user.membership_expires_at:
+            user.membership_expires_at = request.membership_expires_at; updated = True
         if updated:
             db.commit(); db.refresh(user)
 
         return {"status": "ok",
                 "message": "用户资料更新成功" if updated else "用户资料无变化",
-                "user": {"id": user.id, "name": user.name, "email": user.email}}
+                "user": {"id": user.id, "name": user.name, "email": user.email, "heart": user.heart, "is_member": user.is_member, "birthday": user.birthday, "membership_expires_at": user.membership_expires_at}}
     except HTTPException:
         raise
     except Exception as e:
@@ -232,7 +238,7 @@ def get_user_profile(user_id: int = Depends(get_current_user)) -> Dict[str, Any]
         if not user:
             raise HTTPException(status_code=404, detail="用户不存在")
         return {"status": "ok",
-                "user": {"id": user.id, "name": user.name, "email": user.email, "heart": user.heart}}
+                "user": {"id": user.id, "name": user.name, "email": user.email, "heart": user.heart, "is_member": user.is_member, "birthday": user.birthday, "membership_expires_at": user.membership_expires_at}}
     except HTTPException:
         raise
     except Exception as e:
@@ -287,19 +293,23 @@ class ChatRequest(BaseModel):
     emotion: Optional[str] = None  # 该字段不影响分析链路
 
 class ManualJournalRequest(BaseModel):
-    title: str
     content: str
     emotion: Optional[str] = None
 
 class UpdateJournalRequest(BaseModel):
-    title: Optional[str] = None
     content: Optional[str] = None
     emotion: Optional[str] = None
 
 @app.post("/chat")
 def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
     try:
-        logging.info(f"[DEBUG] /chat 入口 user_id={user_id}, request={request}")
+        logging.info("=" * 60)
+        logging.info("💬 聊天接口调用")
+        logging.info("=" * 60)
+        logging.info(f"用户ID: {user_id}")
+        logging.info(f"会话ID: {request.session_id}")
+        logging.info(f"情绪标签: {request.emotion}")
+        
         # 1) Heart 扣减
         db: Session = SessionLocal()
         try:
@@ -327,18 +337,23 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
         user_messages = [m for m in request.messages if m.role == "user"]
         user_query = user_messages[-1].content if user_messages else ""
 
-        # 打印输入
+        # 获取用户信息并打印
         db: Session = SessionLocal()
         u = db.query(User).filter(User.id == user_id).first()
         db.close()
+        
         if user_messages:
-            logging.info(f"[CHAT] 用户ID: {user_id}，昵称: {u.name}，输入: {user_query}")
+            logging.info(f"用户昵称: {u.name}")
+            logging.info(f"用户输入: {user_query}")
         else:
-            logging.info(f"[CHAT] 用户ID: {user_id}，昵称: {u.name}，无输入")
+            logging.info(f"用户昵称: {u.name}")
+            logging.info("用户输入: 无")
+        
+        logging.info("=" * 60)
 
         # 4) 轮次与摘要
         round_index = len(user_messages)
-        context_summary = state.summary(last_n=10)
+        context_summary = state.summary(last_n=1000)  # 显示全量对话历史
 
         # 5) 启发式信号
         explicit_close_phrases = ("先这样", "改天聊", "下次再聊", "谢谢就到这", "收工", "结束", "先到这")
@@ -350,15 +365,45 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
         target_resolved = any(p in uq for p in target_resolved_phrases)
 
         # 6) 分析：LLM 语义 + 规则机派生
-        logging.info(f"[DEBUG] 调用 analyze_turn 前: round_index={round_index}, context_summary={context_summary}, user_query={user_query}")
+        logging.info("=" * 50)
+        logging.info("🚀 开始对话分析")
+        logging.info("=" * 50)
+        logging.info(f"轮次: {round_index}")
+        logging.info(f"用户输入: {user_query}")
+        logging.info(f"对话历史: {context_summary}")
+        
+        # 获取已搜索内容
+        searched_content = ""
+        if request.session_id:
+            try:
+                from llm.search_cache_manager import get_session_searched_content
+                searched_content = get_session_searched_content(request.session_id)
+            except Exception as e:
+                logging.warning(f"[搜索优化] 获取已搜索内容失败: {e}")
+        
         analysis = analyze_turn(
             state_summary=context_summary,
-            question=user_query
+            question=user_query,
+            round_index=round_index,
+            searched_content=searched_content
         )
-        logging.info(f"[DEBUG] analyze_turn 返回: {analysis}")
 
         # 7) 生成：分析→（可选RAG）→生成
-        answer = chat_once(analysis, context_summary, user_query)
+        # 构造用户信息字典
+        user_info = {
+            "name": u.name,
+            "birthday": u.birthday,
+            "heart": u.heart,
+            "is_member": u.is_member
+        } if u else {}
+        
+        # 获取当前时间（包含周几）
+        now = datetime.now()
+        weekdays = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
+        weekday = weekdays[now.weekday()]
+        current_time = now.strftime(f"%Y年%m月%d日 {weekday} %H:%M")
+        
+        answer = chat_once(analysis, context_summary, user_query, current_time=current_time, user_id=user_id, user_info=user_info, session_id=request.session_id)
 
         # 8) 写入历史
         state.update_message("user", user_query)
@@ -374,10 +419,6 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
             current_heart = 0
         finally:
             db.close()
-
-        # 去除首尾引号（保险）
-        if isinstance(answer, str) and len(answer) >= 2 and answer[0] == answer[-1] and answer[0] in ['"', '“', '”', "'"]:
-            answer = answer[1:-1]
 
         # 调试输出
         try:
@@ -432,46 +473,6 @@ def generate_journal(request: ChatRequest, user_id: int = Depends(get_current_us
         journal_result = chat_with_qwen_llm(journal_system_prompt)
         journal_text = journal_result.get("answer", "今天的心情有点复杂，暂时说不清楚。")
 
-        def text_to_smart_html(text):
-            paragraphs = text.split("\n\n")
-            html_parts = []
-            for p in paragraphs:
-                p = p.strip()
-                if not p:
-                    continue
-                lines = p.split("\n")
-                if any(line.strip().startswith(("•", "-", "*")) for line in lines):
-                    for line in lines:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        if line.startswith(("•", "-", "*")):
-                            html_parts.append(f"<li>{line[1:].strip()}</li>")
-                        else:
-                            html_parts.append(f"<p>{line}</p>")
-                elif p.startswith(("1.", "2.", "3.", "4.", "5.")) or "：" in p[:10]:
-                    html_parts.append(f"<h3>{p}</h3>")
-                else:
-                    html_parts.append(f"<p>{p}</p>")
-            body = "\n".join(html_parts)
-            return f"""<!DOCTYPE html>
-<html><head><meta charset="UTF-8">
-<style>
-body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; font-size:20px; font-weight:300; line-height:1.3; margin:0; padding:0; text-align:center; }}
-.text-left {{ text-align:left; }} .text-center {{ text-align:center; }} .text-right {{ text-align:right; }}
-strong,b {{ font-weight:600; }} em,i {{ font-style:italic; }}
-p {{ margin:0; padding:0; }} br {{ line-height:1.3; }}
-</style></head><body>{body}</body></html>"""
-
-        journal_html = text_to_smart_html(journal_text)
-
-        # 标题
-        title_prompt = f"""请根据以下心情日记内容，生成一个简洁、有情感、不超过10个字的标题：\n-----------\n{journal_text}\n-----------"""
-        title_result = chat_with_qwen_llm(title_prompt)
-        title = title_result.get("answer", "今日心情").strip().replace('"', '')
-        if len(title) > 10:
-            title = title[:10] + "..."
-
         # 入库
         db: Session = SessionLocal()
         try:
@@ -481,86 +482,78 @@ p {{ margin:0; padding:0; }} br {{ line-height:1.3; }}
                 logging.warning(f"⚠️ 消息JSON化失败：{je}，使用兜底格式")
                 messages_json = json.dumps([{"role": getattr(m, "role", "unknown"), "content": getattr(m, "content", str(m))} for m in request.messages], ensure_ascii=False)
 
-            from utils.html_processor import process_journal_content
-            processed = process_journal_content(journal_html)
-
             journal_entry = Journal(
                 user_id=user_id,
-                title=title,
                 content=journal_text,
-                content_html=processed["content_html"],
-                content_plain=processed["content_plain"],
-                content_format=processed["content_format"],
-                is_safe=processed["is_safe"],
                 messages=messages_json,
                 session_id=request.session_id,
                 emotion=request.emotion,
             )
             db.add(journal_entry); db.commit(); db.refresh(journal_entry)
             logging.info(f"✅ 日记已保存 ID={journal_entry.id}")
+            
+            # 同步生成记忆点
+            try:
+                from memory import generate_memory_point_for_journal
+                success = generate_memory_point_for_journal(journal_entry.id)
+                if success:
+                    logging.info(f"✅ 日记 {journal_entry.id} 记忆点生成成功")
+                else:
+                    logging.warning(f"⚠️ 日记 {journal_entry.id} 记忆点生成失败")
+            except Exception as memory_e:
+                logging.warning(f"⚠️ 记忆点生成失败: {memory_e}")
+                
         except Exception as e:
             logging.error(f"❌ 保存日记失败：{e}")
-            db.rollback()
-        finally:
-            db.close()
-
-        # 返回当前heart
-        db: Session = SessionLocal()
-        try:
-            cur = db.query(User).filter(User.id == user_id).first()
-            current_heart = cur.heart if cur else 0
-        except Exception as e:
-            logging.error(f"❌ 获取heart失败：{e}")
-            current_heart = 0
+            db.rollback(); raise
         finally:
             db.close()
 
         return {
-            "journal": journal_text,
-            "content_html": processed["content_html"],
-            "content_plain": processed["content_plain"],
-            "content_format": processed["content_format"],
-            "is_safe": processed["is_safe"],
-            "title": title,
-            "journal_id": journal_entry.id if "journal_entry" in locals() else None,
+            "journal_id": journal_entry.id,
+            "content": journal_text,
             "emotion": request.emotion,
             "status": "success",
-            "user_heart": current_heart,
         }
 
     except Exception as e:
-        logging.error(f"[❌ ERROR] 心情日记生成失败: {e}")
-        return {"journal": "生成失败", "title": "今日心情", "journal_id": None,
-                "emotion": request.emotion if hasattr(request, "emotion") else None, "status": "error"}
+        logging.error(f"[❌ ERROR] 生成日记失败: {e}")
+        return {
+            "journal_id": None,
+            "content": "",
+            "emotion": request.emotion if hasattr(request, "emotion") else None,
+            "status": "error",
+        }
 
 # ==================== 手动日记 ====================
 @app.post("/journal/create")
 def create_manual_journal(request: ManualJournalRequest, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
     try:
-        logging.info(f"\n📝 手动日记：user={user_id}, title={request.title}")
-        title = (request.title or "").strip().replace('"', '')
-        if len(title) > 50:
-            title = title[:50] + "..."
-
-        from utils.html_processor import process_journal_content
-        processed = process_journal_content(request.content)
+        logging.info(f"\n📝 手动日记：user={user_id}")
 
         db: Session = SessionLocal()
         try:
             journal_entry = Journal(
                 user_id=user_id,
-                title=title,
-                content=processed.get("content", processed["content_plain"]),
-                content_html=processed["content_html"],
-                content_plain=processed["content_plain"],
-                content_format=processed["content_format"],
-                is_safe=processed["is_safe"],
+                content=request.content,
                 messages="[]",
                 session_id="manual",
                 emotion=request.emotion,
             )
             db.add(journal_entry); db.commit(); db.refresh(journal_entry)
             logging.info(f"✅ 手动日记已保存 ID={journal_entry.id}")
+            
+            # 同步生成记忆点
+            try:
+                from memory import generate_memory_point_for_journal
+                success = generate_memory_point_for_journal(journal_entry.id)
+                if success:
+                    logging.info(f"✅ 手动日记 {journal_entry.id} 记忆点生成成功")
+                else:
+                    logging.warning(f"⚠️ 手动日记 {journal_entry.id} 记忆点生成失败")
+            except Exception as memory_e:
+                logging.warning(f"⚠️ 记忆点生成失败: {memory_e}")
+                
         except Exception as e:
             logging.error(f"❌ 保存手动日记失败：{e}")
             db.rollback(); raise
@@ -569,12 +562,7 @@ def create_manual_journal(request: ManualJournalRequest, user_id: int = Depends(
 
         return {
             "journal_id": journal_entry.id,
-            "title": title,
-            "content": processed.get("content", processed["content_plain"]),
-            "content_html": processed["content_html"],
-            "content_plain": processed["content_plain"],
-            "content_format": processed["content_format"],
-            "is_safe": processed["is_safe"],
+            "content": request.content,
             "emotion": request.emotion,
             "status": "success",
         }
@@ -583,13 +571,8 @@ def create_manual_journal(request: ManualJournalRequest, user_id: int = Depends(
         logging.error(f"[❌ ERROR] 手动日记创建失败: {e}")
         return {
             "journal_id": None,
-            "title": request.title if hasattr(request, "title") else "",
             "content": request.content if hasattr(request, "content") else "",
-            "content_html": "",
-            "content_plain": "",
-            "content_format": "html",
-            "is_safe": False,
-            "emotion": request.emotion if hasattr(request, "emotion") else None,
+            "emotion": request.emotion if hasattr(request, "emotion") else "",
             "status": "error",
         }
 
@@ -609,10 +592,9 @@ def get_user_journals(user_id: int = Depends(get_current_user), limit: int = 20,
             except json.JSONDecodeError:
                 messages = []
             out.append({
-                "id": j.id, "title": j.title, "content": j.content,
-                "content_html": j.content_html, "content_plain": j.content_plain,
-                "content_format": j.content_format, "is_safe": j.is_safe,
+                "id": j.id, "content": j.content,
                 "messages": messages, "session_id": j.session_id, "emotion": j.emotion,
+                "memory_point": j.memory_point,
                 "created_at": j.created_at.isoformat() if j.created_at else None,
                 "updated_at": j.updated_at.isoformat() if j.updated_at else None,
             })
@@ -639,10 +621,9 @@ def get_journal_detail(journal_id: int, user_id: int = Depends(get_current_user)
             messages = []
 
         data = {
-            "id": j.id, "title": j.title, "content": j.content,
-            "content_html": j.content_html, "content_plain": j.content_plain,
-            "content_format": j.content_format, "is_safe": j.is_safe,
+            "id": j.id, "content": j.content,
             "messages": messages, "session_id": j.session_id, "emotion": j.emotion,
+            "memory_point": j.memory_point,
             "created_at": j.created_at.isoformat() if j.created_at else None,
             "updated_at": j.updated_at.isoformat() if j.updated_at else None,
         }
@@ -665,23 +646,13 @@ def update_journal(journal_id: int, request: UpdateJournalRequest, user_id: int 
             raise HTTPException(status_code=404, detail="日记不存在")
 
         updated_fields = []
-        if request.title is not None:
-            title = request.title.strip().replace('"', '')
-            if len(title) > 50: title = title[:50] + "..."
-            j.title = title; updated_fields.append("title")
-
         if request.content is not None:
-            from utils.html_processor import process_journal_content
-            processed = process_journal_content(request.content)
-            j.content = processed.get("content", processed["content_plain"])
-            j.content_html = processed["content_html"]
-            j.content_plain = processed["content_plain"]
-            j.content_format = processed["content_format"]
-            j.is_safe = processed["is_safe"]
+            j.content = request.content
             updated_fields.append("content")
 
         if request.emotion is not None:
-            j.emotion = request.emotion; updated_fields.append("emotion")
+            j.emotion = request.emotion
+            updated_fields.append("emotion")
 
         from datetime import timezone, timedelta as _td
         j.updated_at = datetime.now(timezone(_td(hours=8)))
@@ -692,12 +663,7 @@ def update_journal(journal_id: int, request: UpdateJournalRequest, user_id: int 
         return {
             "status": "success",
             "journal_id": j.id,
-            "title": j.title,
             "content": j.content,
-            "content_html": j.content_html,
-            "content_plain": j.content_plain,
-            "content_format": j.content_format,
-            "is_safe": j.is_safe,
             "emotion": j.emotion,
             "updated_fields": updated_fields,
             "message": "日记更新成功",

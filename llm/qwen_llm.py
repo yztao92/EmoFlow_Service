@@ -67,6 +67,7 @@ class QwenLLM:
             # 解析响应
             if response and "output" in response:
                 reply = response["output"]["text"]
+                
                 # logger.info(f"✅ 千问API调用成功，生成长度: {len(reply)}")
                 return reply
             else:
