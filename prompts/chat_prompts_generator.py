@@ -35,7 +35,7 @@ def build_final_prompt(
 ## Step 3: 用户背景
 ### 📋 用户基本信息
 {user_info_block.strip()}
-### 🧷 记忆点提示
+### 🧷 记忆点提示（如有）
 {memories_block.strip()}
 
 ## Step 4: 当前分析状态
@@ -47,8 +47,6 @@ def build_final_prompt(
 ## Step 5: 回复策略指引
 {strategy_block.strip()}
 
-## Step 6: 可选参考知识
-{rag_block.strip()}
 
 ---
 
@@ -60,15 +58,15 @@ def build_final_prompt(
 - ✅ 允许犹豫：可说"嗯…"、"可能是…"、"我在想…"
 - ✅ 简单直接：不要长篇大论或绕弯子
 - ✅ 避免套话：比如"希望我的建议对你有帮助"等
-- ✅ 引用记忆点：如果用户询问过往事件，可以自然引用上面的记忆点信息
 
-
+**重要**：如果上面有参考知识，请优先引用具体数据和分析，避免空洞的客套话。用事实说话，让回复更有价值。
 
 ---
 ## 🔒 回复格式约束（必须遵守）：
 - 回复建议为 1～3 句话，总字数控制在 60 字以内
 - 避免连续劝解、说理或讲经历
 - 优先情绪回应，其次再自然引导
+- 返回的内容要纯文本，整体不要带引号
 
 请输出你的回复：
 """.strip()
@@ -117,7 +115,7 @@ def render_generation_strategy_block(ana: Dict[str, Any]) -> str:
                     "本轮任务是：「对用户提到的问题，给出 1 条具体、可执行的建议」",
                     "建议必须直接回应用户表达的痛点或困扰，而不是转移话题或抽象安慰",
                     "建议可以是：行动方案、思考角度、下一步步骤，必须有实际指向性",
-                    "禁止使用「去散步、听音乐、先别想」等情绪安抚或回避型建议"
+                    "禁止使用「去散步、听音乐、先别想」等情绪安抚或回避型建议",
                     "不得重复前面已经表达的共情语或安慰话术"
                 ])
             else:
@@ -156,60 +154,13 @@ def render_rag_block(rag_bullets: list) -> str:
     if not rag_bullets:
         return ""
     bullets = "\n".join(f"- {b}" for b in rag_bullets)
-    return f"""以下内容可能对回应有帮助，如符合当前情绪场景，可自然融入：\n{bullets}"""
+    return f"""以下是和当前对话话题直接相关的最新信息，**请引用参考这些内容增强你的回应真实感**：\n{bullets}"""
 
 
 def render_user_memories_block(memories: list) -> str:
     if not memories:
         return "（无记忆点）"
-    
-    # 处理记忆点，添加时间前缀
-    memory_lines = []
-    for journal in memories:
-        if hasattr(journal, 'memory_point') and journal.memory_point:
-            # 清理记忆点内容
-            memory = journal.memory_point.strip()
-            
-            # 移除各种可能的引号和符号
-            if memory.startswith('"') and memory.endswith('"'):
-                memory = memory[1:-1]
-            elif memory.startswith('"') and memory.endswith('"'):
-                memory = memory[1:-1]
-            
-            # 移除开头的 "- " 符号
-            if memory.startswith('- '):
-                memory = memory[2:]
-            
-            # 移除引号
-            if memory.startswith('"') and memory.endswith('"'):
-                memory = memory[1:-1]
-            
-            # 检查是否已经有时间前缀，如果有就移除
-            if memory.startswith('2025-') and ' ' in memory:
-                # 如果已经有时间前缀，直接使用
-                memory_with_time = memory
-            else:
-                # 添加时间前缀
-                if hasattr(journal, 'created_at') and journal.created_at:
-                    time_str = journal.created_at.strftime("%Y-%m-%d %H:%M")
-                    memory_with_time = f"{time_str} {memory}"
-                else:
-                    memory_with_time = memory
-            
-            # 构建完整的记忆点格式：直接拼接时间、情绪和内容
-            time_str = journal.created_at.strftime("%Y-%m-%d %H:%M") if hasattr(journal, 'created_at') and journal.created_at else "未知时间"
-            emotion = journal.emotion if hasattr(journal, 'emotion') and journal.emotion else "未记录"
-            
-            # 清理记忆点内容（移除可能的时间前缀）
-            clean_memory = memory
-            if clean_memory.startswith('2025-') and ' ' in clean_memory:
-                # 移除时间前缀
-                clean_memory = clean_memory.split(' ', 1)[1] if ' ' in clean_memory else clean_memory
-            
-            formatted_memory = f'"{time_str}" "{emotion}" "{clean_memory}"'
-            memory_lines.append(f"- {formatted_memory}")
-    
-    return "以下是用户过往分享的事件，可作为参考内容使用（当用户询问过往事件时，请自然引用这些信息）：\n" + "\n".join(memory_lines)
+    return "以下是用户过往分享的事件，可作为参考内容使用：\n" + "\n".join(f"- {m}" for m in memories)
 
 
 def render_user_info_block(user_info: Dict[str, Any]) -> str:

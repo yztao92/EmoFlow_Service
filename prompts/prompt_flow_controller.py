@@ -17,7 +17,7 @@ def chat_once(analysis: dict, state_summary: str, question: str, current_time: s
     if user_id:
         try:
             from memory import get_user_latest_memories
-            user_memories = get_user_latest_memories(user_id, limit=10)
+            user_memories = get_user_latest_memories(user_id, limit=5)
             if user_memories:
                 logging.info(f"📝 获取到用户 {user_id} 的 {len(user_memories)} 个记忆点")
             else:
@@ -35,44 +35,40 @@ def chat_once(analysis: dict, state_summary: str, question: str, current_time: s
         except Exception as e:
             logging.warning("RAG 检索失败，跳过：%s", e)
 
-    # —— 新增：实时搜索RAG —— #
+    # —— 实时搜索RAG（优先使用缓存，必要时进行新搜索）—— #
     if analysis.get("need_live_search"):
         try:
-            from llm.qianfan_rag import get_rag_bullets_for_query_with_cache
-            live_queries = analysis.get("live_search_queries", [])
-            # 只处理第一个搜索词，避免多个搜索拖慢速度
-            if len(live_queries) > 1:
-                live_queries = [live_queries[0]]
+            from llm.qwen_live_search import search_live_multiple
             
-            for query in live_queries:
-                # 使用带缓存的搜索函数
-                if session_id:
-                    from llm.search_cache_manager import get_cached_search_result
-                    live_bullets = get_rag_bullets_for_query_with_cache(query, session_id)
-                else:
-                    # 如果没有session_id，回退到普通搜索
-                    from llm.qianfan_rag import get_rag_bullets_for_query
-                    live_bullets = get_rag_bullets_for_query(query)
-                
-                if live_bullets:
-                    rag_bullets.extend(live_bullets)
-                else:
-                    # 添加降级提示
-                    rag_bullets.append(f"抱歉，暂时无法获取'{query}'的最新信息，请稍后再试或尝试其他查询。")
+            live_queries = analysis.get("live_search_queries", [])
+            has_timeliness_requirement = analysis.get("has_timeliness_requirement", False)
+            logging.info(f"[实时搜索] 开始处理 {len(live_queries)} 个搜索查询")
+            logging.info(f"[实时搜索] 时效性要求: {has_timeliness_requirement}")
+            
+            # 使用独立的千问实时检索模块
+            live_results = search_live_multiple(live_queries, has_timeliness_requirement, session_id=session_id)
+            
+            if live_results:
+                rag_bullets.extend(live_results)
+                logging.info(f"[实时搜索] 获得 {len(live_results)} 个搜索结果")
+            else:
+                logging.warning("[实时搜索] 未获得任何搜索结果")
                     
         except Exception as e:
             logging.warning("实时搜索RAG失败，跳过：%s", e)
     
-    # —— 新增：即使不需要新搜索，也要传递已搜索的内容 —— #
-    elif session_id:
+    # —— 如果没有新搜索结果，尝试从缓存中获取已有的搜索信息 —— #
+    if not rag_bullets and session_id:
         try:
-            from llm.search_cache_manager import get_session_searched_content
-            searched_content = get_session_searched_content(session_id)
-            if searched_content:
-                # 将已搜索的内容添加到rag_bullets中
-                rag_bullets.append(f"已搜索的相关信息：\n{searched_content}")
+            from llm.search_cache import get_cached_search_results
+            cached_results = get_cached_search_results(session_id)
+            if cached_results:
+                # 取最近3条缓存结果
+                for result in cached_results[-3:]:
+                    rag_bullets.append(result['result'])
+                logging.info(f"[缓存搜索] 已加载 {len(cached_results)} 条缓存搜索信息到参考知识")
         except Exception as e:
-            logging.warning(f"[搜索优化] 添加已搜索内容失败: {e}")
+            logging.warning(f"[缓存搜索] 获取缓存搜索信息失败: {e}")
 
     # —— 拼装最终 Prompt —— #
     final_prompt = build_final_prompt(
@@ -97,12 +93,25 @@ def chat_once(analysis: dict, state_summary: str, question: str, current_time: s
     
     # 清理可能出现的多余引号
     if isinstance(answer, str):
+        # 添加调试日志
+        logging.info(f"🔍 引号清理前: '{answer}'")
+        
         # 使用正则表达式清理所有类型的引号（包括Unicode引号）
         import re
         # 移除所有类型的引号（包括Unicode引号）
         answer = re.sub(r'^["""''""]+', '', answer)  # 移除开头的引号
         answer = re.sub(r'["""''""]+$', '', answer)  # 移除结尾的引号
         answer = answer.strip()  # 移除空白字符
+        
+        logging.info(f"🔍 引号清理后: '{answer}'")
+    
+    # 格式化显示LLM返回结果
+    logging.info("=" * 50)
+    logging.info("🤖 LLM 返回结果")
+    logging.info("=" * 50)
+    logging.info(f"原始响应: {resp}")
+    logging.info(f"提取答案: {answer}")
+    logging.info("=" * 50)
 
     # —— 失败回退（根据 emotion_type 适配）—— #
     if not isinstance(answer, str) or len(answer.strip()) < 4:

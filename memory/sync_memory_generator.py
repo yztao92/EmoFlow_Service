@@ -101,6 +101,12 @@ def _generate_memory_point(journal: Journal) -> Optional[str]:
         elif memory_point.startswith('"') and memory_point.endswith('"'):
             memory_point = memory_point[1:-1]
         
+        # 添加时间前缀
+        if journal.created_at:
+            # 格式化为 "YYYY-MM-DD" 格式
+            time_str = journal.created_at.strftime("%Y-%m-%d")
+            memory_point = f"{time_str} {memory_point}"
+        
         return memory_point
         
     except Exception as e:

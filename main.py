@@ -79,6 +79,7 @@ def on_startup():
         logging.warning("⚠️ 检索功能可能不可用（不影响聊天主流程）")
 
     start_heart_reset_scheduler()
+    start_cache_cleanup_scheduler()
 
 def reset_all_users_heart():
     try:
@@ -111,6 +112,41 @@ def start_heart_reset_scheduler():
         logging.info("✅ Heart重置任务已启动：每天00:00执行")
     except Exception as e:
         logging.error(f"❌ 启动定时任务失败：{e}")
+
+def clear_search_cache():
+    """清空搜索缓存目录"""
+    try:
+        import os
+        import shutil
+        cache_dir = "search_cache"
+        
+        if os.path.exists(cache_dir):
+            # 删除目录下的所有文件
+            for filename in os.listdir(cache_dir):
+                file_path = os.path.join(cache_dir, filename)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+            
+            logging.info("🧹 搜索缓存清理完成：已清空所有缓存文件")
+        else:
+            logging.info("🧹 搜索缓存目录不存在，无需清理")
+            
+    except Exception as e:
+        logging.error(f"❌ 缓存清理失败：{e}")
+
+def start_cache_cleanup_scheduler():
+    """启动缓存清理定时任务"""
+    try:
+        scheduler.add_job(
+            func=clear_search_cache,
+            trigger=CronTrigger(hour=0, minute=0),
+            id="cache_cleanup_job",
+            name="每日清理搜索缓存",
+            replace_existing=True,
+        )
+        logging.info("✅ 缓存清理任务已启动：每天00:00执行")
+    except Exception as e:
+        logging.error(f"❌ 启动缓存清理任务失败：{e}")
 
 @app.on_event("shutdown")
 def on_shutdown():
@@ -372,20 +408,11 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
         logging.info(f"用户输入: {user_query}")
         logging.info(f"对话历史: {context_summary}")
         
-        # 获取已搜索内容
-        searched_content = ""
-        if request.session_id:
-            try:
-                from llm.search_cache_manager import get_session_searched_content
-                searched_content = get_session_searched_content(request.session_id)
-            except Exception as e:
-                logging.warning(f"[搜索优化] 获取已搜索内容失败: {e}")
-        
         analysis = analyze_turn(
             state_summary=context_summary,
             question=user_query,
             round_index=round_index,
-            searched_content=searched_content
+            session_id=request.session_id
         )
 
         # 7) 生成：分析→（可选RAG）→生成

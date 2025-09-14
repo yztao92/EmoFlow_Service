@@ -14,7 +14,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from database_models import SessionLocal, Journal
 
-def get_user_latest_memories(user_id: int, limit: int = 5) -> List[Journal]:
+def get_user_latest_memories(user_id: int, limit: int = 5) -> List[str]:
     """
     获取用户最新的记忆点
     
@@ -23,7 +23,7 @@ def get_user_latest_memories(user_id: int, limit: int = 5) -> List[Journal]:
         limit: 返回的记忆点数量，默认5个
         
     返回:
-        List[Journal]: 包含记忆点的日记对象列表，如果没有记忆点则返回空列表
+        List[str]: 记忆点列表，如果没有记忆点则返回空列表
     """
     db = SessionLocal()
     try:
@@ -33,7 +33,20 @@ def get_user_latest_memories(user_id: int, limit: int = 5) -> List[Journal]:
             Journal.memory_point.isnot(None)
         ).order_by(Journal.created_at.desc()).limit(limit).all()
         
-        return journals
+        # 提取记忆点内容
+        memories = []
+        for journal in journals:
+            if journal.memory_point:
+                # 清理记忆点内容，移除可能的引号
+                memory = journal.memory_point.strip()
+                if memory.startswith('"') and memory.endswith('"'):
+                    memory = memory[1:-1]
+                elif memory.startswith('"') and memory.endswith('"'):
+                    memory = memory[1:-1]
+                
+                memories.append(memory)
+        
+        return memories
         
     except Exception as e:
         print(f"❌ 获取用户记忆点失败: {e}")
