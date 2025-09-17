@@ -8,6 +8,8 @@ from .database import init_db, SessionLocal
 # 导出数据模型
 from .user import User
 from .journal import Journal
+from .chat_session import ChatSession
+from .image import Image
 
 # 导出数据验证模型
 from .schemas import AppleLoginRequest
@@ -18,5 +20,7 @@ __all__ = [
     "SessionLocal", 
     "User",
     "Journal",
+    "ChatSession",
+    "Image",
     "AppleLoginRequest"
 ] 

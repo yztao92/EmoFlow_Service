@@ -1,0 +1,27 @@
+{
+  "cleanup_strategies": {
+    "unused_images": {
+      "enabled": true,
+      "description": "清理未被日记引用的图片"
+    },
+    "old_images": {
+      "enabled": true,
+      "days": 30,
+      "description": "清理30天前的图片"
+    },
+    "large_images": {
+      "enabled": false,
+      "max_size_mb": 10,
+      "description": "清理超过10MB的图片"
+    }
+  },
+  "cleanup_schedule": {
+    "run_every_hours": 24,
+    "max_cleanup_per_run": 100,
+    "backup_before_delete": false
+  },
+  "notifications": {
+    "log_cleanup_stats": true,
+    "alert_on_errors": true
+  }
+}

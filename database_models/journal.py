@@ -11,15 +11,14 @@ from .database import Base
 class Journal(Base):
     """
     日记数据模型（简化版）
-    功能：存储用户的心情日记，包含对话历史和情绪信息
+    功能：存储用户的心情日记，包含情绪信息和会话关联
     
     字段说明：
         - id: 主键，日记唯一标识
         - user_id: 外键，关联用户ID
-        - content: 日记内容
-        - messages: 对话历史（JSON格式存储）
+        - content: 日记内容（LLM生成）
         - emotion: 情绪标签
-        - session_id: 关联的对话会话ID
+        - session_id: 关联的对话会话ID（用于获取完整对话历史）
         - memory_point: 记忆点摘要（LLM生成的智能总结）
         - created_at: 创建时间
         - updated_at: 更新时间
@@ -37,10 +36,10 @@ class Journal(Base):
     content = Column(Text, nullable=False)  # 日记内容，不可为空
     
     # 关联信息字段
-    messages = Column(Text, nullable=True)  # 对话历史，JSON格式存储，可为空
     emotion = Column(String, nullable=True)  # 情绪标签，可为空
     session_id = Column(String, nullable=True)  # 关联的对话会话ID，可为空
     memory_point = Column(Text, nullable=True)  # 记忆点摘要，LLM生成的智能总结，可为空
+    images = Column(String, nullable=True)  # 关联的图片ID列表，用逗号分隔，如"1,2,3"
     
     # 时间戳字段
     # 使用lambda函数确保每次创建时都获取当前时间

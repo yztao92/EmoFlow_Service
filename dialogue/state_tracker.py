@@ -46,7 +46,7 @@ class StateTracker:
     def summary(self, last_n: int = 10) -> str:
         """
         生成极简摘要：取最近 last_n 条消息（user/assistant 各自作为一条）
-        :param last_n: 取最近多少条消息（非“轮”）
+        :param last_n: 取最近多少条消息（非"轮"）
         """
         tail = self.history[-last_n:]
         lines: List[str] = []
@@ -102,10 +102,21 @@ class StateTracker:
 
     def to_dict(self) -> dict:
         """
-        导出简要状态（可用于调试/日志）
+        导出完整状态（用于数据库存储）
         """
         return {
+            "history": self.history,
             "rounds": self.get_round_count(),
             "stage_by_round": self.get_stage_by_round(),
             "history_len": len(self.history),
         }
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> 'StateTracker':
+        """
+        从字典创建StateTracker实例（用于数据库恢复）
+        """
+        instance = cls()
+        if 'history' in data:
+            instance.history = data['history']
+        return instance

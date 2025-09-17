@@ -38,3 +38,6 @@ database/*.db
 
 # 数据集文件夹
 dataset/
+
+# 用户上传文件
+uploads/
