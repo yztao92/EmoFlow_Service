@@ -85,9 +85,15 @@ def _generate_memory_point(journal: Journal) -> Optional[str]:
         # 获取日记内容
         content = journal.content
         
+        # 获取图片分析内容
+        image_analysis_content = _get_image_analysis_content(journal)
+        
         # 构建分析提示词
         prompt = _create_analysis_prompt()
-        prompt = prompt.format(journal_content=content)
+        prompt = prompt.format(
+            journal_content=content,
+            image_analysis=image_analysis_content
+        )
         
         # 调用LLM进行分析
         response = chat_with_llm(prompt)
@@ -113,38 +119,93 @@ def _generate_memory_point(journal: Journal) -> Optional[str]:
         logger.error(f"❌ 生成记忆点失败: {e}")
         return None
 
+def _get_image_analysis_content(journal: Journal) -> str:
+    """
+    获取日记关联图片的分析内容
+    """
+    try:
+        if not journal.images:
+            return ""
+        
+        # 解析图片ID列表
+        image_ids = [int(id_str.strip()) for id_str in journal.images.split(",") if id_str.strip()]
+        if not image_ids:
+            return ""
+        
+        # 获取图片分析结果
+        from database_models.database import SessionLocal
+        from database_models.image import Image
+        import json
+        
+        db = SessionLocal()
+        try:
+            images = db.query(Image).filter(Image.id.in_(image_ids)).all()
+            
+            analysis_parts = []
+            for img in images:
+                if img.analysis_result:
+                    try:
+                        # 解析JSON格式的分析结果
+                        analysis_data = json.loads(img.analysis_result)
+                        if isinstance(analysis_data, dict):
+                            # 提取关键信息
+                            summary = analysis_data.get('summary', '')
+                            emotion = analysis_data.get('emotion', '')
+                            objects = analysis_data.get('objects', [])
+                            scene = analysis_data.get('scene', '')
+                            
+                            # 构建图片分析描述
+                            img_desc = f"图片分析：{summary}"
+                            if emotion:
+                                img_desc += f"，情绪：{emotion}"
+                            if scene:
+                                img_desc += f"，场景：{scene}"
+                            if objects:
+                                img_desc += f"，包含：{', '.join(objects)}"
+                            
+                            analysis_parts.append(img_desc)
+                    except json.JSONDecodeError:
+                        # 如果不是JSON格式，直接使用原始内容
+                        analysis_parts.append(f"图片分析：{img.analysis_result}")
+            
+            return "；".join(analysis_parts) if analysis_parts else ""
+            
+        finally:
+            db.close()
+            
+    except Exception as e:
+        logger.warning(f"⚠️ 获取图片分析内容失败: {e}")
+        return ""
+
 def _create_analysis_prompt() -> str:
     """
-    创建记忆点分析的提示词
+    生成简洁型记忆点：每篇日记只提炼一句话的核心事件
     """
     return """
-你是一个专业的用户心理分析师，需要基于用户的日记内容，生成一个详细的记忆点总结。
+你是"记忆点提炼器"。请从用户的日记中提取 **一句话核心记忆点**。
 
-## 分析要求：
-请仔细分析这篇日记，生成一个包含以下要素的记忆点总结：
+## 要求
+- 一句话描述「发生了什么事」
+- 保留关键信息（人物、事件、结果）
+- 长度 ≤ 25 字
+- 客观简洁，不做主观评价
+- 不要带日期、引号或多余解释
 
-1. **核心事件**：发生了什么重要的事情
-2. **具体细节**：包含关键的人物、地点、时间、结果等
-3. **情感状态**：用户的感受和情绪变化
-4. **影响意义**：这件事对用户的影响或意义
+## 示例
+原文：今天加班到很晚，身心很疲惫  
+记忆点：加班到深夜感到疲惫  
 
-## 输出要求：
-- 总结要详细具体，包含关键信息
-- 长度控制在30-50字之间
-- 用客观的语言描述，避免过度主观判断
-- 突出日记中最重要、最有价值的内容
-- 如果涉及人际关系，要说明具体对象
-- 如果涉及工作/学习，要说明具体领域或成果
-- 输出格式：直接输出记忆点内容，不要包含引号或时间前缀
+原文：和女友因为旅行计划产生分歧，讨论预算和目的地  
+记忆点：与女友因旅行计划产生分歧  
 
-## 示例格式：
-和女友因为旅行计划产生分歧，讨论了预算和目的地，最终达成妥协
-工作压力大，连续加班到深夜，感觉身心疲惫，但项目有了重要进展
-朋友聚会很开心，大家分享近况，回忆大学时光，心情愉悦放松
-考试失败，数学科目成绩不理想，感到失落，决定加强复习
+原文：朋友聚会很开心，大家回忆大学时光  
+记忆点：和朋友聚会聊天回忆大学  
 
-## 日记内容：
+## 日记内容
 {journal_content}
 
-请基于以上要求，生成一个详细的记忆点总结：
-"""
+## 图片分析
+{image_analysis}
+
+请基于以上规则，输出 1 条简洁记忆点：
+""".strip()

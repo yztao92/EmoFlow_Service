@@ -1,0 +1,72 @@
+[
+  {
+    "user_id": 2,
+    "user_name": "Yuki Zhang",
+    "journals_count": 6,
+    "status": "success",
+    "update_time": "2025-09-19T16:51:39.752611"
+  },
+  {
+    "user_id": 3,
+    "user_name": "Liang Shi",
+    "journals_count": 2,
+    "status": "success",
+    "update_time": "2025-09-19T16:51:41.421333"
+  },
+  {
+    "user_id": 4,
+    "user_name": "安玄 田",
+    "journals_count": 1,
+    "status": "success",
+    "update_time": "2025-09-19T16:51:42.148402"
+  },
+  {
+    "user_id": 5,
+    "user_name": "Rebecca. Xiong",
+    "journals_count": 1,
+    "status": "success",
+    "update_time": "2025-09-19T16:51:43.234264"
+  },
+  {
+    "user_id": 7,
+    "user_name": "Maggie Chou",
+    "journals_count": 2,
+    "status": "success",
+    "update_time": "2025-09-19T16:51:46.124354"
+  },
+  {
+    "user_id": 8,
+    "user_name": "Shiyu Chen",
+    "journals_count": 3,
+    "status": "success",
+    "update_time": "2025-09-19T16:51:50.001442"
+  },
+  {
+    "user_id": 9,
+    "user_name": "青 卢",
+    "journals_count": 1,
+    "status": "success",
+    "update_time": "2025-09-19T16:51:50.599865"
+  },
+  {
+    "user_id": 1,
+    "user_name": "Nick Yang",
+    "journals_count": 7,
+    "status": "success",
+    "update_time": "2025-09-19T16:51:56.780792"
+  },
+  {
+    "user_id": 11,
+    "user_name": "John Apple",
+    "journals_count": 1,
+    "status": "success",
+    "update_time": "2025-09-19T16:51:58.128677"
+  },
+  {
+    "user_id": 12,
+    "user_name": "驰 张",
+    "journals_count": 1,
+    "status": "success",
+    "update_time": "2025-09-19T16:51:58.641159"
+  }
+]

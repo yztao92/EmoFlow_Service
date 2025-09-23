@@ -144,6 +144,7 @@ class ImageService:
         保存图片记录到数据库
         """
         from database_models import SessionLocal
+        import json
         
         db: Session = SessionLocal()
         try:

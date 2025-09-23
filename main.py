@@ -542,7 +542,9 @@ class UpdateJournalRequest(BaseModel):
     content: Optional[str] = None
     emotion: Optional[str] = None
     has_image: bool = False  # 是否有图片
-    image_data: Optional[List[str]] = None  # Base64编码的图片数据列表
+    # 增量更新图片字段
+    keep_image_ids: Optional[List[int]] = None  # 保留的图片ID列表
+    add_image_data: Optional[List[str]] = None  # 新增的图片Base64数据列表
 
 @app.post("/chat")
 def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
@@ -1184,17 +1186,24 @@ def update_journal(journal_id: int, request: UpdateJournalRequest, user_id: int 
             j.emotion = request.emotion
             updated_fields.append("emotion")
 
-        # 处理图片更新
-        if request.has_image and request.image_data:
+        # 处理图片增量更新
+        if request.has_image:
             try:
-                logging.info(f"📷 开始处理日记图片更新，共{len(request.image_data)}张图片...")
+                logging.info(f"📷 开始处理日记图片增量更新...")
                 
-                # 删除原有图片
+                # 获取当前图片ID列表
+                current_image_ids = []
                 if j.images:
-                    old_image_ids = j.images.split(",")
-                    for image_id in old_image_ids:
+                    current_image_ids = [int(id) for id in j.images.split(",")]
+                
+                # 1. 删除不在保留列表中的图片
+                keep_ids = set(request.keep_image_ids or [])
+                deleted_count = 0
+                
+                for image_id in current_image_ids:
+                    if image_id not in keep_ids:
                         try:
-                            old_image = db.query(Image).filter(Image.id == int(image_id)).first()
+                            old_image = db.query(Image).filter(Image.id == image_id).first()
                             if old_image:
                                 # 删除图片文件
                                 import os
@@ -1202,44 +1211,54 @@ def update_journal(journal_id: int, request: UpdateJournalRequest, user_id: int 
                                     os.remove(old_image.file_path)
                                 # 删除图片记录
                                 db.delete(old_image)
+                                deleted_count += 1
+                                logging.info(f"🗑️ 删除图片: {image_id}")
                         except Exception as e:
-                            logging.warning(f"⚠️ 删除旧图片失败: {e}")
+                            logging.warning(f"⚠️ 删除图片 {image_id} 失败: {e}")
                 
-                # 保存新图片
+                # 2. 添加新图片
                 new_image_ids = []
-                for i, image_data_b64 in enumerate(request.image_data):
-                    try:
-                        # 解码Base64图片数据
-                        import base64
-                        image_data = base64.b64decode(image_data_b64.split(',')[1] if ',' in image_data_b64 else image_data_b64)
-                        logging.info(f"📷 图片{i+1}数据解码成功，大小: {len(image_data)} bytes")
-                        
-                        # 保存并分析图片
-                        result = image_service.save_image(
-                            image_data=image_data,
-                            user_id=user_id,
-                            session_id=j.session_id or "manual",
-                            original_filename=f"updated_journal_image_{i+1}.jpg"
-                        )
-                        
-                        if result["success"]:
-                            new_image_ids.append(str(result["image_id"]))
-                            logging.info(f"✅ 图片{i+1}保存成功: {result['image_id']}")
-                        else:
-                            logging.error(f"❌ 图片{i+1}处理失败: {result.get('error', '未知错误')}")
+                if request.add_image_data:
+                    logging.info(f"📷 开始添加 {len(request.add_image_data)} 张新图片...")
+                    for i, image_data_b64 in enumerate(request.add_image_data):
+                        try:
+                            # 解码Base64图片数据
+                            import base64
+                            image_data = base64.b64decode(image_data_b64.split(',')[1] if ',' in image_data_b64 else image_data_b64)
+                            logging.info(f"📷 新图片{i+1}数据解码成功，大小: {len(image_data)} bytes")
                             
-                    except Exception as e:
-                        logging.error(f"❌ 图片{i+1}处理异常: {e}")
-                        import traceback
-                        traceback.print_exc()
+                            # 保存并分析图片
+                            result = image_service.save_image(
+                                image_data=image_data,
+                                user_id=user_id,
+                                session_id=j.session_id or "manual",
+                                original_filename=f"updated_journal_image_{i+1}.jpg"
+                            )
+                            
+                            if result["success"]:
+                                new_image_ids.append(result["image_id"])
+                                logging.info(f"✅ 新图片{i+1}保存成功: {result['image_id']}")
+                            else:
+                                logging.error(f"❌ 新图片{i+1}处理失败: {result.get('error', '未知错误')}")
+                                
+                        except Exception as e:
+                            logging.error(f"❌ 新图片{i+1}处理异常: {e}")
+                            import traceback
+                            traceback.print_exc()
                 
-                # 更新图片字段
-                j.images = ",".join(new_image_ids) if new_image_ids else None
+                # 3. 更新图片字段：保留的图片 + 新增的图片
+                final_image_ids = list(keep_ids) + new_image_ids
+                j.images = ",".join(map(str, final_image_ids)) if final_image_ids else None
                 updated_fields.append("images")
-                logging.info(f"✅ 图片更新完成，新图片ID: {new_image_ids}")
+                
+                logging.info(f"✅ 图片增量更新完成:")
+                logging.info(f"   - 删除图片: {deleted_count} 张")
+                logging.info(f"   - 保留图片: {len(keep_ids)} 张")
+                logging.info(f"   - 新增图片: {len(new_image_ids)} 张")
+                logging.info(f"   - 最终图片: {len(final_image_ids)} 张")
                 
             except Exception as e:
-                logging.error(f"❌ 图片更新异常: {e}")
+                logging.error(f"❌ 图片增量更新异常: {e}")
                 import traceback
                 traceback.print_exc()
         elif request.has_image is False:
