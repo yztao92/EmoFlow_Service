@@ -24,7 +24,7 @@ from dialogue.state_tracker import StateTracker
 from dialogue.session_manager import session_manager
 from services.image_service import image_service
 from database_models import init_db, SessionLocal, User, Journal, ChatSession, Image
-from database_models.schemas import UpdateProfileRequest, SubscriptionVerifyRequest, SubscriptionStatusResponse, AppleWebhookNotification, TestLoginRequest
+from database_models.schemas import UpdateProfileRequest, SubscriptionVerifyRequest, SubscriptionStatusResponse, AppleWebhookNotification, TestLoginRequest, DeleteAccountRequest, DeleteAccountResponse
 from subscription.apple_subscription import (
     verify_receipt_with_apple, parse_subscription_info, update_user_subscription, 
     get_user_subscription_status, handle_apple_webhook_notification, AppleSubscriptionError
@@ -515,6 +515,93 @@ def get_user_heart(user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
     except Exception as e:
         logging.error(f"❌ 获取用户心数失败: {e}")
         raise HTTPException(status_code=500, detail="获取用户心数失败")
+
+@app.delete("/user/account")
+def delete_user_account(request: DeleteAccountRequest, user_id: int = Depends(get_current_user)) -> DeleteAccountResponse:
+    """
+    删除用户账户
+    功能：永久删除用户账户及其所有关联数据
+    """
+    try:
+        logging.info(f"🗑️ 删除账户请求: user_id={user_id}, confirm_deletion={request.confirm_deletion}")
+        
+        # 验证确认删除标志
+        if not request.confirm_deletion:
+            raise HTTPException(status_code=400, detail="必须确认删除操作")
+        
+        db: Session = SessionLocal()
+        try:
+            # 查找用户
+            user = db.query(User).filter(User.id == user_id).first()
+            if not user:
+                raise HTTPException(status_code=404, detail="用户不存在")
+            
+            # 统计要删除的数据
+            deleted_data = {
+                "journals": 0,
+                "chat_sessions": 0,
+                "images": 0,
+                "user_id": user_id
+            }
+            
+            # 删除用户的日记
+            journals = db.query(Journal).filter(Journal.user_id == user_id).all()
+            deleted_data["journals"] = len(journals)
+            for journal in journals:
+                db.delete(journal)
+            
+            # 删除用户的聊天会话
+            chat_sessions = db.query(ChatSession).filter(ChatSession.user_id == user_id).all()
+            deleted_data["chat_sessions"] = len(chat_sessions)
+            for session in chat_sessions:
+                db.delete(session)
+            
+            # 删除用户的图片记录
+            images = db.query(Image).filter(Image.user_id == user_id).all()
+            deleted_data["images"] = len(images)
+            for image in images:
+                db.delete(image)
+            
+            # 删除用户上传的图片文件
+            user_upload_dir = f"uploads/images/user_{user_id}"
+            if os.path.exists(user_upload_dir):
+                import shutil
+                shutil.rmtree(user_upload_dir)
+                logging.info(f"🗑️ 已删除用户图片目录: {user_upload_dir}")
+            
+            # 清理用户的内存会话缓存
+            from dialogue.session_manager import session_manager
+            user_session_keys = [key for key in session_manager.memory_cache.keys() if key.startswith(f"user_{user_id}_")]
+            for key in user_session_keys:
+                del session_manager.memory_cache[key]
+            logging.info(f"🗑️ 已清理用户内存会话缓存: {len(user_session_keys)}个会话")
+            
+            # 最后删除用户记录
+            db.delete(user)
+            
+            # 提交所有更改
+            db.commit()
+            
+            logging.info(f"✅ 账户删除成功: user_id={user_id}, 删除数据={deleted_data}")
+            
+            return DeleteAccountResponse(
+                success=True,
+                message="账户及其所有数据已成功删除",
+                deleted_data=deleted_data
+            )
+            
+        except Exception as e:
+            db.rollback()
+            logging.error(f"❌ 删除账户时数据库操作失败: {e}")
+            raise HTTPException(status_code=500, detail="删除账户失败")
+        finally:
+            db.close()
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"❌ 删除账户失败: {e}")
+        raise HTTPException(status_code=500, detail="删除账户失败")
 
 # ==================== 聊天 ====================
 class Message(BaseModel):

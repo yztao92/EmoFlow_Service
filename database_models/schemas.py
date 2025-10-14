@@ -95,4 +95,20 @@ class TestLoginRequest(BaseModel):
     功能：为Apple测试人员提供测试账号登录
     """
     username: str  # 测试用户名
-    password: str  # 测试密码 
+    password: str  # 测试密码
+
+class DeleteAccountRequest(BaseModel):
+    """
+    删除账户请求模型
+    功能：验证删除账户请求的数据格式
+    """
+    confirm_deletion: bool  # 确认删除标志，必须为True才能删除
+
+class DeleteAccountResponse(BaseModel):
+    """
+    删除账户响应模型
+    功能：返回删除账户操作的结果
+    """
+    success: bool  # 删除是否成功
+    message: str  # 操作结果消息
+    deleted_data: dict  # 删除的数据统计 
