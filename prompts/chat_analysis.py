@@ -210,12 +210,12 @@ def analyze_turn(state_summary: str, question: str, round_index: int = 1, sessio
         cached_search_info=cached_search_info
     )
     
-    # 调试：打印完整的分析prompt
-    logging.info("=" * 80)
-    logging.info("📋 CHAT_ANALYSIS 完整Prompt")
-    logging.info("=" * 80)
-    logging.info(prompt)
-    logging.info("=" * 80)
+    # 调试：打印完整的分析prompt（已禁用）
+    # logging.info("=" * 80)
+    # logging.info("📋 CHAT_ANALYSIS 完整Prompt")
+    # logging.info("=" * 80)
+    # logging.info(prompt)
+    # logging.info("=" * 80)
 
     try:
         result = chat_with_llm(prompt)

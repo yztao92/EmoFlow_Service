@@ -718,6 +718,7 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
         # 4) 轮次与摘要
         round_index = state.get_round_count() + 1  # 当前轮次
         context_summary = state.summary(last_n=1000)  # 显示全量对话历史
+        conversation_history = state.get_conversation_messages(last_n=1000)  # 获取对话历史消息列表
 
         # 5) 启发式信号
         explicit_close_phrases = ("先这样", "改天聊", "下次再聊", "谢谢就到这", "收工", "结束", "先到这")
@@ -758,7 +759,7 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
         weekday = weekdays[now.weekday()]
         current_time = now.strftime(f"%Y年%m月%d日 {weekday} %H:%M")
         
-        answer = chat_once(analysis, context_summary, user_query, current_time=current_time, user_id=user_id, user_info=user_info, session_id=request.session_id)
+        answer = chat_once(analysis, context_summary, user_query, current_time=current_time, user_id=user_id, user_info=user_info, session_id=request.session_id, conversation_history=conversation_history)
 
         # 8) 更新会话历史
         # 如果有图片分析结果，将分析结果合并到用户消息中

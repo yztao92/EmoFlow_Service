@@ -3,7 +3,7 @@
 # 实现：提供统一的LLM接口，支持多种LLM模型
 
 import logging
-from typing import Dict, Any, Callable
+from typing import Dict, Any, Callable, List
 from langchain_core.messages import HumanMessage
 
 # 导入LLM包装器
@@ -52,6 +52,50 @@ def chat_with_llm(prompt: str) -> str:
         except Exception as backup_e:
             logging.error("❌ 备用 DeepSeek 也失败：%s", backup_e)
             return "抱歉，我现在无法生成回复，请稍后再试。"
+
+def chat_with_llm_messages(messages: List[Dict[str, str]]) -> str:
+    """
+    使用消息列表格式调用LLM（支持system + 历史对话 + 当前输入）
+    返回：纯字符串
+    """
+    try:
+        qwen = get_qwen_llm()
+        # 将字典格式转换为LangChain消息格式
+        langchain_messages = []
+        for msg in messages:
+            if msg["role"] == "system":
+                from langchain_core.messages import SystemMessage
+                langchain_messages.append(SystemMessage(content=msg["content"]))
+            elif msg["role"] == "user":
+                from langchain_core.messages import HumanMessage
+                langchain_messages.append(HumanMessage(content=msg["content"]))
+            elif msg["role"] == "assistant":
+                from langchain_core.messages import AIMessage
+                langchain_messages.append(AIMessage(content=msg["content"]))
+        
+        # 打印最终输入到LLM API的原始JSON数据
+        logging.info("=" * 80)
+        logging.info("🚀 最终输入到LLM API的原始JSON数据")
+        logging.info("=" * 80)
+        
+        # 将LangChain消息转换回JSON格式
+        import json
+        json_messages = []
+        for msg in langchain_messages:
+            role = msg.__class__.__name__.replace("Message", "").lower()
+            json_messages.append({
+                "role": role,
+                "content": msg.content
+            })
+        
+        # 打印完整的JSON数据
+        logging.info(json.dumps(json_messages, ensure_ascii=False, indent=2))
+        logging.info("=" * 80)
+        
+        return _call_to_str(lambda msgs: qwen._call(msgs), langchain_messages)
+    except Exception as e:
+        logging.error("❌ 千问LLM消息列表调用失败：%s", e)
+        return "抱歉，我现在无法生成回复，请稍后再试。"
 
 # === 日记模块用：保持【dict】返回，兼容原有调用 ===
 def chat_with_qwen_llm(prompt: str) -> Dict[str, Any]:

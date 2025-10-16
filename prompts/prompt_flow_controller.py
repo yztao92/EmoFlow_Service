@@ -1,8 +1,8 @@
 # File: prompts/prompt_flow_controller.py
 import logging
 from typing import List, Dict, Any
-from prompts.chat_prompts_generator import build_final_prompt
-from llm.llm_factory import chat_with_llm
+from prompts.chat_prompts_generator import build_conversation_messages
+from llm.llm_factory import chat_with_llm, chat_with_llm_messages
 
 try:
     from retriever.search import retrieve
@@ -11,7 +11,7 @@ except Exception:
     def retrieve(queries: List[str], top_k: int = 4):
         return []
 
-def chat_once(analysis: dict, state_summary: str, question: str, current_time: str = None, user_id: int = None, user_info: Dict[str, Any] = None, session_id: str = None) -> str:
+def chat_once(analysis: dict, state_summary: str, question: str, current_time: str = None, user_id: int = None, user_info: Dict[str, Any] = None, session_id: str = None, conversation_history: List[Dict[str, str]] = None) -> str:
     # —— 获取用户记忆点（如果有user_id）—— #
     user_memories = []
     if user_id:
@@ -70,31 +70,32 @@ def chat_once(analysis: dict, state_summary: str, question: str, current_time: s
         except Exception as e:
             logging.warning(f"[缓存搜索] 获取缓存搜索信息失败: {e}")
 
-    # —— 拼装最终 Prompt —— #
-    final_prompt = build_final_prompt(
+    # —— 拼装对话消息列表 —— #
+    messages = build_conversation_messages(
         {**analysis, "rag_bullets": rag_bullets, "rag_queries": analysis.get("rag_queries", [])},
-        state_summary,
         question,
         current_time,
-        user_memories,  # 新增：传递用户记忆点
-        user_info  # 新增：传递用户基本信息
+        user_memories,  # 传递用户记忆点
+        user_info,  # 传递用户基本信息
+        conversation_history  # 传递对话历史
     )
     
-    # 格式化显示最终prompt
-    logging.info("=" * 50)
-    logging.info("🎯 最终拼接的 PROMPT")
-    logging.info("=" * 50)
-    logging.info(final_prompt)
-    logging.info("=" * 50)
+    # 格式化显示消息列表（已禁用）
+    # logging.info("=" * 50)
+    # logging.info("🎯 最终拼接的消息列表")
+    # logging.info("=" * 50)
+    # for i, msg in enumerate(messages):
+    #     logging.info(f"消息 {i+1} [{msg['role']}]: {msg['content'][:100]}...")
+    # logging.info("=" * 50)
 
     # —— 生成 —— #
-    resp = chat_with_llm(final_prompt)
+    resp = chat_with_llm_messages(messages)
     answer = resp.get("answer", "") if isinstance(resp, dict) else resp
     
     # 清理可能出现的多余引号
     if isinstance(answer, str):
-        # 添加调试日志
-        logging.info(f"🔍 引号清理前: '{answer}'")
+        # 添加调试日志（已禁用）
+        # logging.info(f"🔍 引号清理前: '{answer}'")
         
         # 使用正则表达式清理所有类型的引号（包括Unicode引号）
         import re
@@ -103,15 +104,15 @@ def chat_once(analysis: dict, state_summary: str, question: str, current_time: s
         answer = re.sub(r'["""''""]+$', '', answer)  # 移除结尾的引号
         answer = answer.strip()  # 移除空白字符
         
-        logging.info(f"🔍 引号清理后: '{answer}'")
+        # logging.info(f"🔍 引号清理后: '{answer}'")
     
-    # 格式化显示LLM返回结果
-    logging.info("=" * 50)
-    logging.info("🤖 LLM 返回结果")
-    logging.info("=" * 50)
-    logging.info(f"原始响应: {resp}")
-    logging.info(f"提取答案: {answer}")
-    logging.info("=" * 50)
+    # 格式化显示LLM返回结果（已禁用）
+    # logging.info("=" * 50)
+    # logging.info("🤖 LLM 返回结果")
+    # logging.info("=" * 50)
+    # logging.info(f"原始响应: {resp}")
+    # logging.info(f"提取答案: {answer}")
+    # logging.info("=" * 50)
 
     # —— 失败回退（根据 emotion_type 适配）—— #
     if not isinstance(answer, str) or len(answer.strip()) < 4:

@@ -1,7 +1,125 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 
-def build_final_prompt(
+def build_system_content(
+    ana: Dict[str, Any],
+    current_time: str = None,
+    user_memories: list = None,
+    user_info: Dict[str, Any] = None
+) -> str:
+    """构建系统消息内容（不包含对话历史和当前用户输入）"""
+    
+    identity_block = render_system_identity_block(ana.get("emotion_type", "neutral"))
+    strategy_block = render_generation_strategy_block(ana)
+    rag_block = render_rag_block(ana.get("rag_bullets", [])) if ana.get("rag_bullets") else ""
+    memories_block = render_user_memories_block(user_memories)
+    user_info_block = render_user_info_block(user_info)
+    current_time_block = f"{current_time}" if current_time else ""
+
+    return f"""
+# 🎯 情绪陪伴任务提示词
+
+## Step 1: 角色与风格设定
+{identity_block.strip()}
+
+## Step 2: 基础信息
+### ⏰ 当前时间
+{current_time_block}
+
+## Step 3: 用户背景
+### 📋 用户基本信息
+{user_info_block.strip()}
+
+## Step 4: 当前分析状态
+情绪：{ana.get("emotion_type", "neutral")}
+是否已给过建议：{ana.get("ai_has_given_suggestion", False)}
+用户是否已说明原因：{ana.get("user_has_shared_reason", False)}
+当前是否应收尾：{ana.get("should_end_conversation", False)}
+
+## Step 5: 回复策略指引
+{strategy_block.strip()}
+
+## Step 6: 可选参考信息
+{memories_block.strip()}
+{rag_block.strip()}
+
+---
+
+## Step 7: 自然度诊断（评分分级）
+请先对本轮对话进行主观打分（1–5 分）：  
+1. 情绪强度（1=平淡，5=强烈爆发）  
+2. 表达自然度（1=生硬，5=口语自然）  
+3. 开放程度（1=封闭，5=主动分享）  
+
+计算总分 = 三项相加（范围 3–15）。  
+- ≤7 分：轻度 → 保持陪伴为主，点到为止  
+- 8–11 分：中度 → 共情 + 适度引导  
+- ≥12 分：重度 → 必须提供具体可执行建议  
+
+---
+
+## 🗣️ Step 8: 生成自然语言回复
+请根据参数策略 + 上述分级，生成自然的朋友式回应：  
+
+- 用口语化，避免生硬或书面化  
+- 可以出现停顿、犹豫、感叹（嗯… 可能…）  
+- 简短直接，不要长篇堆砌  
+- 禁止使用套话或客套收尾  
+- 禁止表露 AI 或助手身份  
+
+---
+
+## ✅ Step 9: 输出检查清单
+在输出前，请逐项确认：  
+- 回复是否自然、口语化？  
+- 是否避免了模板化或套话？  
+- 是否避免了"作为AI""希望对你有帮助"等表述？  
+- 是否简洁（1–3 句，总字数 ≤ 60）？  
+- 是否先回应情绪，再自然引导？  
+- 是否保留了用户表达的核心信息？  
+- 如果引用了记忆点，是否自然贴切？如显突兀则忽略。  
+- 是否与上一步的参数策略保持一致？  
+
+---
+
+## 🔒 回复格式约束（必须遵守）：
+- 回复字数 1–3 句，总字数 ≤ 60  
+- 避免连续劝解或说理  
+- 仅输出纯文本，不要加引号  
+
+请根据对话历史和用户当前输入，生成你的最终回复：
+""".strip()
+
+
+def build_conversation_messages_legacy(
+    ana: Dict[str, Any],
+    question: str,
+    current_time: str = None,
+    user_memories: list = None,
+    user_info: Dict[str, Any] = None,
+    conversation_history: List[Dict[str, str]] = None
+) -> List[Dict[str, str]]:
+    """构建完整的对话消息列表（system + 历史对话 + 当前输入）"""
+    
+    # 构建system消息
+    system_content = build_system_content(ana, current_time, user_memories, user_info)
+    
+    # 构建完整消息列表
+    messages = [
+        {"role": "system", "content": system_content}
+    ]
+    
+    # 添加历史对话
+    if conversation_history:
+        messages.extend(conversation_history)
+    
+    # 添加当前用户输入
+    messages.append({"role": "user", "content": question})
+    
+    return messages
+
+
+def build_final_prompt_legacy(
     ana: Dict[str, Any],
     state_summary: str,
     question: str,
@@ -284,3 +402,126 @@ def render_system_identity_block(emotion_type: str) -> str:
             "- 如果不确定用户情绪，也请保持温柔和共情。\n"
             "- 用开放、支持的语气回应对方。\n"
         )
+
+
+# ==================== 新的优化版本函数 ====================
+
+def build_system_identity_content(
+    ana: Dict[str, Any],
+    enable_implicit_cot: bool = True,
+) -> str:
+    """
+    system#1：人格 & 硬约束 &（可选）隐式自检
+    identity 仍然根据 emotion_type 动态变化，这里只是"分层"而非固定。
+    """
+    identity_block = render_system_identity_block(ana.get("emotion_type", "neutral")).strip()
+
+    hard_rules = [
+        "先接住情绪，再轻松回应；避免说教与身份暴露。",
+        "简洁简短，口语化，禁止套话和客套收尾。",
+        "生成自然的朋友式回应，可以出现停顿、犹豫、感叹（嗯… 可能…）。",
+        "简短直接，不要长篇堆砌，禁止表露AI或助手身份。"
+    ]
+    cot_hint = "（回复前先在心里简短思考：情绪/期待/最自然的表达；是否先回应情绪再自然引导；只输出最终口语化回复，不展示思考过程。）"
+
+    lines = [
+        "# 角色与风格设定",
+        identity_block,
+        "## 硬约束",
+        *[f"- {r}" for r in hard_rules]
+    ]
+    if enable_implicit_cot:
+        lines.append(cot_hint)
+
+    return "\n".join(lines).strip()
+
+
+def build_system_context_content(
+    ana: Dict[str, Any],
+    current_time: Optional[str] = None,
+    user_memories: Optional[List[str]] = None,
+    user_info: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    system#2：当轮上下文（时间/分析状态/策略/记忆/RAG）
+    移除对话摘要，因为历史对话已经作为独立消息存在
+    """
+    strategy_block = render_generation_strategy_block(ana).strip()
+    rag_block = render_rag_block(ana.get("rag_bullets", [])) if ana.get("rag_bullets") else ""
+    memories_block = render_user_memories_block(user_memories)
+    user_info_block = render_user_info_block(user_info)
+    current_time_block = f"{current_time}" if current_time else "未知"
+
+    ctx_lines = [
+        "# 当下背景信息",
+        f"⏰ 时间：{current_time_block}",
+        "",
+        "## 用户背景",
+        user_info_block.strip(),
+        "",
+        "## 当前分析状态",
+        f"- 情绪：{ana.get('emotion_type', 'neutral')}",
+        f"- 已给过建议：{ana.get('ai_has_given_suggestion', False)}",
+        f"- 已说明原因：{ana.get('user_has_shared_reason', False)}",
+        f"- 是否应收尾：{ana.get('should_end_conversation', False)}",
+        "",
+        "## 回复策略指引",
+        strategy_block
+    ]
+
+    # 可选参考（自然贴切时再用）
+    if memories_block.strip():
+        ctx_lines += ["", "## 可选参考：用户记忆（自然贴切时再用）", memories_block.strip()]
+    if rag_block.strip():
+        ctx_lines += ["", "## 可选参考：检索知识（自然贴切时再用）", rag_block.strip()]
+
+    return "\n".join(ctx_lines).strip()
+
+
+def _truncate_history(conversation_history: List[Dict[str, str]], max_rounds: int = 100) -> List[Dict[str, str]]:
+    """
+    仅保留最近 N 轮（user+assistant 为一轮）。如果是扁平列表，简单按条数截断到 2*N 或更少。
+    """
+    if not conversation_history:
+        return []
+    # 简单策略：从尾部向前截取最多 2*max_rounds 条
+    keep = max_rounds * 2
+    return conversation_history[-keep:]
+
+
+def build_conversation_messages(
+    ana: Dict[str, Any],
+    question: str,
+    current_time: str = None,
+    user_memories: List[str] = None,
+    user_info: Dict[str, Any] = None,
+    conversation_history: List[Dict[str, str]] = None,
+    max_history_rounds: int = 6,
+    enable_implicit_cot: bool = True,
+) -> List[Dict[str, str]]:
+    """
+    Chat 模式：构建 messages = [system#1, system#2, *history, user]
+    - identity 仍然随 emotion_type 变化；只是逻辑上放在 system#1。
+    - Step 7–9 收敛为 system#1 的隐式自检一句话。
+    """
+    sys1 = build_system_identity_content(ana, enable_implicit_cot=enable_implicit_cot)
+    sys2 = build_system_context_content(
+        ana=ana,
+        current_time=current_time,
+        user_memories=user_memories,
+        user_info=user_info,
+    )
+
+    messages: List[Dict[str, str]] = [
+        {"role": "system", "content": sys1},
+        {"role": "system", "content": sys2},
+    ]
+
+    # 历史对话：直接截断（角色已经在StateTracker中统一为user/assistant）
+    history = _truncate_history(conversation_history or [], max_rounds=max_history_rounds)
+    messages.extend(history)
+
+    # 当前用户输入
+    messages.append({"role": "user", "content": question})
+
+    return messages

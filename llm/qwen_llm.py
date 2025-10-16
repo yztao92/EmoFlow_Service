@@ -96,10 +96,15 @@ class QwenLLM:
         for message in messages:
             if hasattr(message, 'content'):
                 # 根据消息类型设置角色
-                if hasattr(message, 'type') and message.type == 'human':
-                    role = 'user'
-                elif hasattr(message, 'type') and message.type == 'ai':
-                    role = 'assistant'
+                if hasattr(message, 'type'):
+                    if message.type == 'human':
+                        role = 'user'
+                    elif message.type == 'ai':
+                        role = 'assistant'
+                    elif message.type == 'system':
+                        role = 'system'
+                    else:
+                        role = 'user'  # 默认为用户消息
                 else:
                     role = 'user'  # 默认为用户消息
                 

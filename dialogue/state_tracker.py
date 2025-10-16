@@ -4,7 +4,7 @@
 # 额外：提供按轮次的 stage 兜底推断（warmup/mid/wrap）
 
 from __future__ import annotations
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 class StateTracker:
     """
@@ -56,6 +56,21 @@ class StateTracker:
             text = (content or "").strip().replace("\n", " ")
             lines.append(f"• {speaker}: {text}")
         return "【对话历史】\n" + "\n".join(lines)
+
+    def get_conversation_messages(self, last_n: int = 1000) -> List[Dict[str, str]]:
+        """
+        获取对话历史的消息列表格式，用于LLM API调用
+        :param last_n: 取最近多少条消息
+        :return: 消息列表，每个元素包含role和content
+        """
+        tail = self.history[-last_n:]
+        messages = []
+        for role, content in tail:
+            messages.append({
+                "role": role,
+                "content": (content or "").strip()
+            })
+        return messages
 
     def get_recent_user_query(self, last_n: int = 1) -> str:
         """
