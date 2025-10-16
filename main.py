@@ -42,6 +42,7 @@ JWT_EXPIRE_MINUTES = 60 * 24 * 7  # 7天
 APPLE_PUBLIC_KEYS_URL = "https://appleid.apple.com/auth/keys"
 APPLE_ISSUER = "https://appleid.apple.com"
 APPLE_CLIENT_ID = "Nick-Studio.EmoFlow"
+APPLE_SHARED_SECRET = os.getenv("APPLE_SHARED_SECRET")
 apple_keys = []
 
 # ==================== 日志 ====================
@@ -1438,7 +1439,7 @@ def get_journal_history(journal_id: int, user_id: int = Depends(get_current_user
 
 
 # ==================== Apple 订阅 ====================
-@app.post("/subscription/verify")
+@app.post("/iap/verify")
 def verify_subscription(request: SubscriptionVerifyRequest, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
     """
     验证 Apple 订阅收据
@@ -1446,21 +1447,24 @@ def verify_subscription(request: SubscriptionVerifyRequest, user_id: int = Depen
     try:
         logging.info(f"🔍 验证订阅: user_id={user_id}")
         
-        # 1. 向 Apple 验证收据（先尝试沙盒环境）
+        # 使用请求中的password或环境变量中的共享密钥
+        password = request.password or APPLE_SHARED_SECRET
+        
+        # 1. 向 Apple 验证收据（先尝试生产环境）
         try:
             apple_response = verify_receipt_with_apple(
                 receipt_data=request.receipt_data,
-                password=request.password,
-                use_sandbox=True
+                password=password,
+                use_sandbox=False
             )
         except AppleSubscriptionError as e:
-            if "收据是生产收据" in str(e):
-                # 如果是生产收据，尝试生产环境
-                logging.info("🔄 尝试生产环境验证")
+            # 如果生产环境返回 21007，尝试沙盒环境
+            if "21007" in str(e) or "收据是沙盒收据" in str(e):
+                logging.info("🔄 生产环境返回21007，尝试沙盒环境验证")
                 apple_response = verify_receipt_with_apple(
                     receipt_data=request.receipt_data,
-                    password=request.password,
-                    use_sandbox=False
+                    password=password,
+                    use_sandbox=True
                 )
             else:
                 raise e
@@ -1633,7 +1637,7 @@ def get_subscription_products(user_id: int = Depends(get_current_user)) -> Dict[
         products = [
             {
                 "id": "monthly",
-                "name": "包月",
+                "name": "月度",
                 "price": "¥12",
                 "daily_price": "仅需¥0.40/天",
                 "period": "monthly",
@@ -1644,7 +1648,7 @@ def get_subscription_products(user_id: int = Depends(get_current_user)) -> Dict[
             },
             {
                 "id": "yearly",
-                "name": "包年",
+                "name": "年度",
                 "price": "¥98.00",
                 "daily_price": "仅需¥0.27/天",
                 "period": "yearly",

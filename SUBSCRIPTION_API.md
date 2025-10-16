@@ -13,7 +13,7 @@
 
 ### 1. 验证订阅收据
 
-**接口**: `POST /subscription/verify`
+**接口**: `POST /iap/verify`
 
 **描述**: 验证 iOS 应用发送的 App Store 收据，并更新用户订阅状态。
 
@@ -126,7 +126,7 @@ Authorization: Bearer <JWT_TOKEN>
     "products": [
         {
             "id": "monthly",
-            "name": "包月",
+            "name": "月度",
             "price": "¥12",
             "daily_price": "仅需¥0.40/天",
             "period": "monthly",
@@ -137,7 +137,7 @@ Authorization: Bearer <JWT_TOKEN>
         },
         {
             "id": "yearly",
-            "name": "包年",
+            "name": "年度",
             "price": "¥98.00",
             "daily_price": "仅需¥0.27/天",
             "period": "yearly",
@@ -288,7 +288,7 @@ Content-Type: application/json
        receipt_data: receiptString,
        password: "your_shared_secret"
    )
-   // 调用 POST /subscription/verify
+   // 调用 POST /iap/verify
    ```
 
 4. **处理响应**

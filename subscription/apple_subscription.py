@@ -59,6 +59,18 @@ def verify_receipt_with_apple(receipt_data: str, password: Optional[str] = None,
         result = response.json()
         logger.info(f"✅ Apple 验证响应: status={result.get('status')}")
         
+        # 检查状态码
+        status = result.get('status', 0)
+        if status == 21007:
+            # 21007 表示收据是沙盒收据，但我们在生产环境验证
+            raise AppleSubscriptionError("21007: 收据是沙盒收据")
+        elif status == 21008:
+            # 21008 表示收据是生产收据，但我们在沙盒环境验证
+            raise AppleSubscriptionError("21008: 收据是生产收据")
+        elif status != 0:
+            # 其他错误状态码
+            raise AppleSubscriptionError(f"Apple 验证失败: status={status}")
+        
         return result
         
     except requests.exceptions.RequestException as e:
