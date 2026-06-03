@@ -9,6 +9,8 @@ from typing import Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from database_models.user import User
+from database_models import SessionLocal
+from jose import jwt as jose_jwt
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +231,27 @@ def get_user_subscription_status(db: Session, user_id: int) -> Dict[str, Any]:
         "is_member": user.subscription_status == SUBSCRIPTION_STATUS_ACTIVE  # 使用订阅状态判断是否为会员
     }
 
+def parse_transaction_info_jwt(signed_transaction_info: str) -> Dict[str, Any]:
+    """
+    解析 Apple 的 JWT 格式交易信息
+    
+    Args:
+        signed_transaction_info: Apple 签名的 JWT 交易信息
+        
+    Returns:
+        解析后的交易信息字典
+    """
+    try:
+        # 解码 JWT（不需要验证签名，因为数据来自 Apple）
+        decoded = jose_jwt.decode(
+            signed_transaction_info, 
+            options={"verify_signature": False}
+        )
+        return decoded
+    except Exception as e:
+        logger.error(f"❌ 解析交易信息 JWT 失败: {e}")
+        raise AppleSubscriptionError(f"解析交易信息失败: {e}")
+
 def handle_apple_webhook_notification(notification_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     处理 Apple 服务器通知
@@ -248,18 +271,130 @@ def handle_apple_webhook_notification(notification_data: Dict[str, Any]) -> Dict
     if notification_type == "SUBSCRIBED":
         # 新订阅
         logger.info("🆕 新订阅通知")
+        # 新订阅通常需要用户主动验证收据，这里只记录日志
     elif notification_type == "DID_RENEW":
-        # 订阅续费
-        logger.info("🔄 订阅续费通知")
+        # 订阅续费 - 自动更新过期时间
+        logger.info("🔄 订阅续费通知，开始处理自动续费...")
+        try:
+            # 1. 解析交易信息
+            signed_transaction_info = data.get("signed_transaction_info")
+            if not signed_transaction_info:
+                logger.warning("⚠️ 续费通知中没有 signed_transaction_info，跳过处理")
+            else:
+                # 解析 JWT 获取交易信息
+                transaction_info = parse_transaction_info_jwt(signed_transaction_info)
+                original_transaction_id = transaction_info.get("original_transaction_id")
+                
+                if not original_transaction_id:
+                    logger.warning("⚠️ 无法从交易信息中获取 original_transaction_id，跳过处理")
+                else:
+                    # 2. 查找对应的用户
+                    db = SessionLocal()
+                    try:
+                        user = db.query(User).filter(
+                            User.original_transaction_id == original_transaction_id
+                        ).first()
+                        
+                        if not user:
+                            logger.warning(f"⚠️ 未找到 original_transaction_id={original_transaction_id} 对应的用户")
+                        elif not user.latest_receipt:
+                            logger.warning(f"⚠️ 用户 {user.id} 没有存储的收据数据，无法验证")
+                        else:
+                            # 3. 验证收据获取最新过期时间
+                            environment = data.get("environment", "Sandbox")
+                            is_sandbox = environment.lower() == "sandbox"
+                            
+                            try:
+                                apple_response = verify_receipt_with_apple(
+                                    receipt_data=user.latest_receipt,
+                                    use_sandbox=is_sandbox
+                                )
+                            except AppleSubscriptionError as e:
+                                # 如果环境不匹配，尝试切换环境
+                                if "收据是生产收据" in str(e) and is_sandbox:
+                                    logger.info("🔄 尝试生产环境验证")
+                                    apple_response = verify_receipt_with_apple(
+                                        receipt_data=user.latest_receipt,
+                                        use_sandbox=False
+                                    )
+                                    is_sandbox = False
+                                elif "收据是沙盒收据" in str(e) and not is_sandbox:
+                                    logger.info("🔄 尝试沙盒环境验证")
+                                    apple_response = verify_receipt_with_apple(
+                                        receipt_data=user.latest_receipt,
+                                        use_sandbox=True
+                                    )
+                                    is_sandbox = True
+                                else:
+                                    raise e
+                            
+                            # 4. 解析并更新订阅信息
+                            subscription_info = parse_subscription_info(apple_response)
+                            environment_str = "sandbox" if is_sandbox else "production"
+                            
+                            user = update_user_subscription(
+                                db=db,
+                                user_id=user.id,
+                                subscription_info=subscription_info,
+                                receipt_data=user.latest_receipt,
+                                environment=environment_str
+                            )
+                            
+                            # 如果续费成功且为有效订阅，重置心心为100
+                            if user.subscription_status == "active":
+                                user.heart = 100
+                                db.commit()
+                                db.refresh(user)
+                            
+                            logger.info(f"✅ 自动续费处理完成: user_id={user.id}, "
+                                      f"新过期时间={user.subscription_expires_at}, "
+                                      f"状态={user.subscription_status}")
+                            
+                    except Exception as e:
+                        logger.error(f"❌ 处理自动续费失败: {e}")
+                        if db:
+                            db.rollback()
+                    finally:
+                        if db:
+                            db.close()
+                            
+        except Exception as e:
+            logger.error(f"❌ 处理续费通知异常: {e}")
+            # 不抛出异常，避免影响 Webhook 响应
+            
     elif notification_type == "DID_FAIL_TO_RENEW":
         # 续费失败
         logger.info("❌ 续费失败通知")
+        # 可以在这里更新用户状态或发送通知
     elif notification_type == "DID_CANCEL":
         # 订阅取消
         logger.info("🚫 订阅取消通知")
+        # 可以在这里更新用户状态
     elif notification_type == "EXPIRED":
         # 订阅过期
         logger.info("⏰ 订阅过期通知")
+        # 可以在这里更新用户状态为过期
+        try:
+            signed_transaction_info = data.get("signed_transaction_info")
+            if signed_transaction_info:
+                transaction_info = parse_transaction_info_jwt(signed_transaction_info)
+                original_transaction_id = transaction_info.get("original_transaction_id")
+                
+                if original_transaction_id:
+                    db = SessionLocal()
+                    try:
+                        user = db.query(User).filter(
+                            User.original_transaction_id == original_transaction_id
+                        ).first()
+                        
+                        if user and user.subscription_status == "active":
+                            user.subscription_status = SUBSCRIPTION_STATUS_EXPIRED
+                            db.commit()
+                            logger.info(f"✅ 已更新用户 {user.id} 订阅状态为过期")
+                    finally:
+                        db.close()
+        except Exception as e:
+            logger.error(f"❌ 处理过期通知异常: {e}")
     else:
         logger.warning(f"⚠️ 未知通知类型: {notification_type}")
     

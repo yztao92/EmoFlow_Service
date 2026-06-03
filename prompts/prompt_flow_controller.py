@@ -1,7 +1,7 @@
 # File: prompts/prompt_flow_controller.py
 import logging
 from typing import List, Dict, Any
-from prompts.chat_prompts_generator import build_conversation_messages
+from prompts.chat_prompts_generator_v2 import build_conversation_messages
 from llm.llm_factory import chat_with_llm, chat_with_llm_messages
 
 try:
@@ -19,9 +19,9 @@ def chat_once(analysis: dict, state_summary: str, question: str, current_time: s
             from memory import get_user_latest_memories
             user_memories = get_user_latest_memories(user_id, limit=5)
             if user_memories:
-                logging.info(f"📝 获取到用户 {user_id} 的 {len(user_memories)} 个记忆点")
+                logging.debug(f"📝 获取到用户 {user_id} 的 {len(user_memories)} 个记忆点")
             else:
-                logging.info(f"📝 用户 {user_id} 暂无记忆点")
+                logging.debug(f"📝 用户 {user_id} 暂无记忆点")
         except Exception as e:
             logging.warning(f"获取用户记忆点失败，跳过：{e}")
             user_memories = []

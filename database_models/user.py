@@ -40,7 +40,7 @@ class User(Base):
     # 用户基本信息字段
     email = Column(String, nullable=True)  # 用户邮箱，可为空
     name = Column(String, nullable=True)  # 用户姓名，可为空
-    heart = Column(Integer, default=100, nullable=False)  # 用户心数值，默认100，不可为空
+    heart = Column(Integer, default=10, nullable=False)  # 用户心数值，默认10，不可为空
     
     # 用户信息字段
     birthday = Column(Date, nullable=True)  # 用户生日，可为空

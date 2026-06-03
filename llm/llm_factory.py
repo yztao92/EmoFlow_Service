@@ -47,7 +47,7 @@ def chat_with_llm(prompt: str) -> str:
         try:
             deepseek = get_deepseek_llm()
             resp = _call_to_str(lambda p: deepseek._call([HumanMessage(content=p)]), prompt)
-            logging.info("✅ 使用 DeepSeek 作为备用成功，长度=%d", len(resp))
+            logging.debug("✅ 使用 DeepSeek 作为备用成功，长度=%d", len(resp))
             return resp
         except Exception as backup_e:
             logging.error("❌ 备用 DeepSeek 也失败：%s", backup_e)
@@ -73,24 +73,33 @@ def chat_with_llm_messages(messages: List[Dict[str, str]]) -> str:
                 from langchain_core.messages import AIMessage
                 langchain_messages.append(AIMessage(content=msg["content"]))
         
-        # 打印最终输入到LLM API的原始JSON数据
-        logging.info("=" * 80)
-        logging.info("🚀 最终输入到LLM API的原始JSON数据")
-        logging.info("=" * 80)
+        # 打印最终输入到LLM API的原始JSON数据（降为DEBUG）
+        logging.debug("=" * 80)
+        logging.debug("🚀 最终输入到LLM API的原始JSON数据")
+        logging.debug("=" * 80)
         
         # 将LangChain消息转换回JSON格式
         import json
         json_messages = []
         for msg in langchain_messages:
-            role = msg.__class__.__name__.replace("Message", "").lower()
+            # 根据LangChain消息类型映射到标准角色名称
+            if msg.__class__.__name__ == "HumanMessage":
+                role = "user"
+            elif msg.__class__.__name__ == "AIMessage":
+                role = "assistant"
+            elif msg.__class__.__name__ == "SystemMessage":
+                role = "system"
+            else:
+                role = "user"  # 默认为用户消息
+            
             json_messages.append({
                 "role": role,
                 "content": msg.content
             })
         
-        # 打印完整的JSON数据
-        logging.info(json.dumps(json_messages, ensure_ascii=False, indent=2))
-        logging.info("=" * 80)
+        # 打印完整的JSON数据（降为DEBUG）
+        logging.debug(json.dumps(json_messages, ensure_ascii=False, indent=2))
+        logging.debug("=" * 80)
         
         return _call_to_str(lambda msgs: qwen._call(msgs), langchain_messages)
     except Exception as e:

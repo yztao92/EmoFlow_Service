@@ -23,6 +23,7 @@ from prompts.chat_analysis import analyze_turn
 from dialogue.state_tracker import StateTracker
 from dialogue.session_manager import session_manager
 from services.image_service import image_service
+from services.voice_service import voice_service
 from database_models import init_db, SessionLocal, User, Journal, ChatSession, Image
 from database_models.schemas import UpdateProfileRequest, SubscriptionVerifyRequest, SubscriptionStatusResponse, AppleWebhookNotification, TestLoginRequest, DeleteAccountRequest, DeleteAccountResponse
 from subscription.apple_subscription import (
@@ -48,7 +49,9 @@ apple_keys = []
 # ==================== 日志 ====================
 for h in logging.root.handlers[:]:
     logging.root.removeHandler(h)
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+# 默认使用 WARNING 以减少生产环境日志；可通过环境变量 LOG_LEVEL 覆盖
+_LOG_LEVEL = os.getenv("LOG_LEVEL", "WARNING").upper()
+logging.basicConfig(level=getattr(logging, _LOG_LEVEL, logging.WARNING), format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 # ==================== 环境变量检查 ====================
@@ -94,10 +97,23 @@ def reset_all_users_heart():
         logging.info("🕛 开始执行：重置所有用户heart值")
         db: Session = SessionLocal()
         try:
-            total = db.query(User).count()
-            db.query(User).update({"heart": 100})
+            # 获取所有用户
+            users = db.query(User).all()
+            total = len(users)
+            
+            inactive_count = 0
+            active_count = 0
+            
+            for user in users:
+                if user.subscription_status == "active":
+                    user.heart = 100
+                    active_count += 1
+                else:
+                    user.heart = 10
+                    inactive_count += 1
+            
             db.commit()
-            logging.info(f"✅ 已重置 {total} 个用户heart=100")
+            logging.info(f"✅ 已重置 {total} 个用户: {active_count}个会员重置为100, {inactive_count}个普通用户重置为10")
         except Exception as e:
             db.rollback()
             logging.error(f"❌ 定时任务失败：{e}")
@@ -373,7 +389,7 @@ def test_login(request: TestLoginRequest):
                 user = User(
                     name="Apple Reviewer",
                     email="review@test.com",
-                    heart=1000,  # 给测试用户充足的心数
+                    heart=100,  # 给测试用户充足的心数
                     subscription_status="inactive",  # 普通会员，无订阅状态
                     subscription_product_id=None,
                     subscription_expires_at=None,
@@ -390,7 +406,7 @@ def test_login(request: TestLoginRequest):
                 user.subscription_product_id = None
                 user.subscription_expires_at = None
                 user.auto_renew_status = False
-                user.heart = 1000  # 确保有足够的心数
+                user.heart = 100  # 确保有足够的心数
                 db.commit()
                 db.refresh(user)
                 logging.info(f"✅ 更新测试用户为普通会员: user_id={user.id}")
@@ -615,6 +631,9 @@ class ChatRequest(BaseModel):
     emotion: Optional[str] = None  # 该字段不影响分析链路
     has_image: bool = False  # 是否有图片
     image_data: Optional[str] = None  # Base64编码的图片数据（单张）
+    has_voice: bool = False  # 是否有语音
+    voice_data: Optional[str] = None  # Base64编码的音频数据
+    voice_format: Optional[str] = "wav"  # 音频格式：wav, mp3, m4a等
 
 class GenerateJournalRequest(BaseModel):
     session_id: str
@@ -637,12 +656,12 @@ class UpdateJournalRequest(BaseModel):
 @app.post("/chat")
 def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
     try:
-        logging.info("=" * 60)
-        logging.info("💬 聊天接口调用")
-        logging.info("=" * 60)
-        logging.info(f"用户ID: {user_id}")
-        logging.info(f"会话ID: {request.session_id}")
-        logging.info(f"情绪标签: {request.emotion}")
+        logging.debug("=" * 60)
+        logging.debug("💬 聊天接口调用")
+        logging.debug("=" * 60)
+        logging.debug(f"用户ID: {user_id}")
+        logging.debug(f"会话ID: {request.session_id}")
+        logging.debug(f"情绪标签: {request.emotion}")
         
         # 1) Heart 扣减
         db: Session = SessionLocal()
@@ -650,9 +669,9 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
             user = db.query(User).filter(User.id == user_id).first()
             if not user:
                 raise HTTPException(status_code=404, detail="用户不存在")
-            if user.heart < 2:
+            if user.heart < 1:
                 raise HTTPException(status_code=403, detail="心数不足，无法继续聊天，请等待明天重置或充值")
-            user.heart -= 2
+            user.heart -= 1
             db.commit(); db.refresh(user)
         except HTTPException:
             raise
@@ -668,7 +687,7 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
 
         # 3) 处理图片上传（如果有）
         image_analysis = None
-        logging.info(f"🔍 检查图片上传: has_image={request.has_image}, image_data长度={len(request.image_data) if request.image_data else 0}")
+        logging.debug(f"🔍 检查图片上传: has_image={request.has_image}, image_data长度={len(request.image_data) if request.image_data else 0}")
         
         if request.has_image and request.image_data:
             try:
@@ -697,10 +716,48 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
                 import traceback
                 traceback.print_exc()
         else:
-            logging.info(f"📷 没有图片上传")
+            logging.debug(f"📷 没有图片上传")
+
+        # 3.5) 处理语音上传（如果有）
+        voice_text = None
+        logging.debug(f"🔍 检查语音上传: has_voice={request.has_voice}, voice_data长度={len(request.voice_data) if request.voice_data else 0}")
+        
+        if request.has_voice and request.voice_data:
+            try:
+                logging.info(f"🎤 开始处理语音上传...")
+                # 解码Base64音频数据
+                import base64
+                voice_data = voice_service.decode_base64_audio(request.voice_data)
+                logging.info(f"🎤 音频数据解码成功，大小: {len(voice_data)} bytes")
+                
+                # 调用ASR识别语音
+                asr_result = voice_service.recognize_speech(voice_data, request.voice_format or "wav")
+                
+                if asr_result.get("success") and asr_result.get("text"):
+                    voice_text = asr_result["text"]
+                    logging.info(f"✅ 语音识别完成: {voice_text[:50]}...")
+                else:
+                    error_msg = asr_result.get("error", "语音识别失败")
+                    logging.error(f"❌ 语音识别失败: {error_msg}")
+                    # 如果识别失败，使用用户提供的文本消息（如果有）
+                    if not request.user_message:
+                        raise HTTPException(status_code=400, detail=f"语音识别失败: {error_msg}")
+                    
+            except HTTPException:
+                raise
+            except Exception as e:
+                logging.error(f"❌ 语音处理异常: {e}")
+                import traceback
+                traceback.print_exc()
+                # 如果语音处理失败，尝试使用文本消息
+                if not request.user_message:
+                    raise HTTPException(status_code=400, detail="语音处理失败，请提供文本消息或重试")
+        else:
+            logging.debug(f"🎤 没有语音上传")
 
         # 4) 构造用户消息
-        user_query = request.user_message
+        # 如果识别到语音文本，优先使用语音识别的文本
+        user_query = voice_text if voice_text else request.user_message
         if image_analysis:
             # 将图片分析结果作为用户消息的一部分（用于LLM处理）
             image_summary = f"[图片分析] {image_analysis.get('summary', '用户上传了一张图片')}"
@@ -711,9 +768,9 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
         u = db.query(User).filter(User.id == user_id).first()
         db.close()
         
-        logging.info(f"用户昵称: {u.name}")
-        logging.info(f"用户输入: {user_query}")
-        logging.info("=" * 60)
+        logging.debug(f"用户昵称: {u.name}")
+        logging.debug(f"用户输入: {user_query}")
+        logging.debug("=" * 60)
 
         # 4) 轮次与摘要
         round_index = state.get_round_count() + 1  # 当前轮次
@@ -730,12 +787,12 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
         target_resolved = any(p in uq for p in target_resolved_phrases)
 
         # 6) 分析：LLM 语义 + 规则机派生
-        logging.info("=" * 50)
-        logging.info("🚀 开始对话分析")
-        logging.info("=" * 50)
-        logging.info(f"轮次: {round_index}")
-        logging.info(f"用户输入: {user_query}")
-        logging.info(f"对话历史: {context_summary}")
+        logging.debug("=" * 50)
+        logging.debug("🚀 开始对话分析")
+        logging.debug("=" * 50)
+        logging.debug(f"轮次: {round_index}")
+        logging.debug(f"用户输入: {user_query}")
+        logging.debug(f"对话历史: {context_summary}")
         
         analysis = analyze_turn(
             state_summary=context_summary,
@@ -803,7 +860,47 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
         except Exception:
             pass
 
-        return {"response": {"answer": answer, "references": [], "user_heart": current_heart}}
+        # 10.5) 生成语音回复（如果用户发送了语音）
+        voice_reply_data = None
+        has_voice_reply = False
+        if request.has_voice:
+            try:
+                logging.info(f"🔊 开始生成语音回复...")
+                # 调用TTS合成语音
+                tts_result = voice_service.synthesize_speech(
+                    text=answer,
+                    voice_type="xiaoyun",  # 默认音色，可以根据需要调整
+                    audio_format="wav",
+                    sample_rate=16000
+                )
+                
+                if tts_result.get("success") and tts_result.get("audio_data"):
+                    audio_data = tts_result["audio_data"]
+                    # 编码为Base64返回
+                    voice_reply_data = voice_service.encode_audio_to_base64(audio_data, "audio/wav")
+                    has_voice_reply = True
+                    logging.info(f"✅ 语音合成完成，大小: {len(audio_data)} bytes")
+                else:
+                    error_msg = tts_result.get("error", "语音合成失败")
+                    logging.error(f"❌ 语音合成失败: {error_msg}")
+                    # 语音合成失败不影响文本回复
+                    
+            except Exception as e:
+                logging.error(f"❌ 语音合成异常: {e}")
+                import traceback
+                traceback.print_exc()
+                # 语音合成失败不影响文本回复
+
+        return {
+            "response": {
+                "answer": answer,
+                "references": [],
+                "user_heart": current_heart,
+                "has_voice_reply": has_voice_reply,  # 告诉前端是否有语音回复
+                "voice_reply_data": voice_reply_data if has_voice_reply else None,  # Base64编码的语音数据
+                "voice_reply_format": "wav" if has_voice_reply else None  # 语音格式
+            }
+        }
 
     except HTTPException:
         raise
@@ -811,6 +908,133 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
         import traceback
         logging.exception("[❌ ERROR] 聊天接口处理失败（完整堆栈）：")
         return {"response": {"answer": "抱歉，系统暂时无法处理您的请求，请稍后再试。", "references": []}}
+
+@app.get("/chat/history/list")
+def get_chat_history_list(
+    limit: int = 50,
+    user_id: int = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    获取当前用户的历史会话列表（按最近更新时间倒序）
+    """
+    try:
+        limit = max(1, min(limit, 200))
+
+        db: Session = SessionLocal()
+        try:
+            sessions = db.query(ChatSession).filter(
+                ChatSession.user_id == user_id,
+                ChatSession.is_active == True
+            ).order_by(ChatSession.updated_at.desc()).limit(limit).all()
+
+            items = []
+            for s in sessions:
+                raw_history = []
+                if s.state_data:
+                    try:
+                        state_data = json.loads(s.state_data)
+                        raw_history = state_data.get("history", [])
+                    except Exception:
+                        raw_history = []
+
+                last_message = ""
+                last_role = None
+                if raw_history:
+                    last_item = raw_history[-1]
+                    if isinstance(last_item, (list, tuple)) and len(last_item) >= 2:
+                        last_role = str(last_item[0])
+                        last_message = str(last_item[1] or "")
+                    elif isinstance(last_item, dict):
+                        last_role = str(last_item.get("role") or "")
+                        last_message = str(last_item.get("content") or "")
+
+                items.append({
+                    "session_id": s.session_id,
+                    "message_count": len(raw_history),
+                    "last_role": last_role,
+                    "last_message_preview": last_message[:120],
+                    "created_at": s.created_at.isoformat() if s.created_at else None,
+                    "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+                })
+
+            return {
+                "status": "success",
+                "count": len(items),
+                "sessions": items
+            }
+        finally:
+            db.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"❌ 获取历史会话列表失败: user_id={user_id}, error={e}")
+        raise HTTPException(status_code=500, detail="获取历史会话列表失败")
+
+@app.get("/chat/history/{session_id}")
+def get_chat_history_detail(
+    session_id: str,
+    limit: int = 1000,
+    user_id: int = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """
+    获取当前用户某个历史会话的详细消息内容
+    """
+    try:
+        session_id = (session_id or "").strip()
+        if not session_id:
+            raise HTTPException(status_code=400, detail="session_id 不能为空")
+
+        limit = max(1, min(limit, 5000))
+
+        db: Session = SessionLocal()
+        try:
+            chat_session = db.query(ChatSession).filter(
+                ChatSession.user_id == user_id,
+                ChatSession.session_id == session_id,
+                ChatSession.is_active == True
+            ).first()
+
+            if not chat_session:
+                raise HTTPException(status_code=404, detail="会话不存在")
+
+            raw_history = []
+            if chat_session.state_data:
+                try:
+                    state_data = json.loads(chat_session.state_data)
+                    raw_history = state_data.get("history", [])
+                except Exception:
+                    raw_history = []
+
+            history: List[Dict[str, str]] = []
+            for item in raw_history:
+                if isinstance(item, (list, tuple)) and len(item) >= 2:
+                    role = str(item[0] or "")
+                    content = str(item[1] or "")
+                elif isinstance(item, dict):
+                    role = str(item.get("role") or "")
+                    content = str(item.get("content") or "")
+                else:
+                    continue
+                history.append({"role": role, "content": content})
+
+            history = history[-limit:]
+
+            return {
+                "status": "success",
+                "session_id": session_id,
+                "total_messages": len(raw_history),
+                "returned_messages": len(history),
+                "created_at": chat_session.created_at.isoformat() if chat_session.created_at else None,
+                "updated_at": chat_session.updated_at.isoformat() if chat_session.updated_at else None,
+                "history": history
+            }
+        finally:
+            db.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"❌ 获取会话详情失败: user_id={user_id}, session_id={session_id}, error={e}")
+        raise HTTPException(status_code=500, detail="获取会话详情失败")
 
 # ==================== 图片访问 ====================
 def get_current_user_from_auth(authorization: str = Header(..., alias="Authorization")) -> int:
@@ -868,21 +1092,19 @@ def get_image(user_id: int, filename: str, current_user_id: int = Depends(get_cu
 def generate_journal(request: GenerateJournalRequest, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
     try:
         logging.info(f"\n📝 生成日记：user={user_id}")
-        # 扣heart
+        
+        # 获取用户信息（不消耗心心）
         db: Session = SessionLocal()
         try:
             user = db.query(User).filter(User.id == user_id).first()
             if not user:
                 raise HTTPException(status_code=404, detail="用户不存在")
-            if user.heart < 4:
-                raise HTTPException(status_code=403, detail="心数不足，无法生成日记，请等待明天重置或充值")
-            user.heart -= 4
-            db.commit(); db.refresh(user)
+            # 日记生成不消耗心心，只获取用户信息
         except HTTPException:
             raise
         except Exception as e:
             db.rollback()
-            logging.error(f"❌ 更新heart失败: {e}")
+            logging.error(f"❌ 获取用户信息失败: {e}")
             raise HTTPException(status_code=500, detail="系统错误，请稍后再试")
         finally:
             db.close()
@@ -1440,6 +1662,7 @@ def get_journal_history(journal_id: int, user_id: int = Depends(get_current_user
 
 
 # ==================== Apple 订阅 ====================
+@app.post("/subscription/verify")
 @app.post("/iap/verify")
 def verify_subscription(request: SubscriptionVerifyRequest, user_id: int = Depends(get_current_user)) -> Dict[str, Any]:
     """
@@ -1484,6 +1707,10 @@ def verify_subscription(request: SubscriptionVerifyRequest, user_id: int = Depen
                 receipt_data=request.receipt_data,
                 environment=environment
             )
+            # 订阅验证成功后，重置心心为100
+            if user.subscription_status == "active":
+                user.heart = 100
+                db.commit(); db.refresh(user)
             
             return {
                 "status": "success",
@@ -1600,6 +1827,10 @@ def refresh_subscription_status(user_id: int = Depends(get_current_user)) -> Dic
                 receipt_data=user.latest_receipt,
                 environment=environment
             )
+            # 刷新成功且为有效订阅，则重置心心为100
+            if user.subscription_status == "active":
+                user.heart = 100
+                db.commit(); db.refresh(user)
             
             return {
                 "status": "success",
@@ -1643,7 +1874,7 @@ def get_subscription_products(user_id: int = Depends(get_current_user)) -> Dict[
                 "daily_price": "仅需¥0.40/天",
                 "period": "monthly",
                 "period_display": "每月",
-                "apple_product_id": "com.yztao92.EmoFlow.subscription.monthly",
+                "apple_product_id": "NickStudio.EmoFlow.subscription.monthly",
                 "is_popular": False,
                 "sort_order": 1
             },
@@ -1654,7 +1885,7 @@ def get_subscription_products(user_id: int = Depends(get_current_user)) -> Dict[
                 "daily_price": "仅需¥0.27/天",
                 "period": "yearly",
                 "period_display": "每年",
-                "apple_product_id": "com.yztao92.EmoFlow.subscription.yearly",
+                "apple_product_id": "NickStudio.EmoFlow.subscription.yearly",
                 "is_popular": True,
                 "sort_order": 2
             }
@@ -1719,6 +1950,10 @@ def restore_subscription(request: SubscriptionVerifyRequest, user_id: int = Depe
                 receipt_data=request.receipt_data,
                 environment=environment
             )
+            # 恢复购买成功且为有效订阅，则重置心心为100
+            if user.subscription_status == "active":
+                user.heart = 100
+                db.commit(); db.refresh(user)
             
             return {
                 "status": "success",
@@ -1744,3 +1979,40 @@ def restore_subscription(request: SubscriptionVerifyRequest, user_id: int = Depe
     except Exception as e:
         logging.error(f"❌ 恢复订阅异常: {e}")
         raise HTTPException(status_code=500, detail="恢复订阅失败，请稍后再试")
+
+# ==================== 临时音频文件服务 ====================
+@app.get("/temp_audio/{filename}")
+def get_temp_audio(filename: str):
+    """
+    提供临时音频文件的访问
+    用于语音识别API需要URL时的文件访问
+    """
+    import os
+    from fastapi.responses import FileResponse
+    
+    temp_dir = os.path.join(os.getcwd(), "temp_audio")
+    file_path = os.path.join(temp_dir, filename)
+    
+    # 安全检查：确保文件在temp_audio目录内
+    if not os.path.abspath(file_path).startswith(os.path.abspath(temp_dir)):
+        raise HTTPException(status_code=403, detail="禁止访问")
+    
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="文件不存在")
+    
+    # 根据文件扩展名确定MIME类型
+    ext = filename.split('.')[-1].lower()
+    media_types = {
+        'wav': 'audio/wav',
+        'mp3': 'audio/mpeg',
+        'm4a': 'audio/mp4',
+        'aac': 'audio/aac',
+        'pcm': 'audio/pcm'
+    }
+    media_type = media_types.get(ext, 'audio/wav')
+    
+    return FileResponse(
+        file_path,
+        media_type=media_type,
+        filename=filename
+    )

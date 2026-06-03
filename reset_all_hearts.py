@@ -20,26 +20,36 @@ logging.basicConfig(
 
 def reset_all_users_heart():
     """
-    重置所有用户的心心为100
+    重置所有用户的心心：会员用户重置为100，普通用户重置为10
     """
     try:
         logging.info("🕛 开始执行：重置所有用户heart值")
         
         db = SessionLocal()
         try:
-            # 统计用户总数
-            total_users = db.query(User).count()
+            # 获取所有用户
+            users = db.query(User).all()
+            total_users = len(users)
             logging.info(f"📊 当前共有 {total_users} 个用户")
             
             if total_users == 0:
                 logging.warning("⚠️ 没有找到任何用户")
                 return True
             
-            # 重置所有用户的心心为100
-            updated_count = db.query(User).update({"heart": 100})
+            inactive_count = 0
+            active_count = 0
+            
+            for user in users:
+                if user.subscription_status == "active":
+                    user.heart = 100
+                    active_count += 1
+                else:
+                    user.heart = 10
+                    inactive_count += 1
+            
             db.commit()
             
-            logging.info(f"✅ 成功重置 {updated_count} 个用户的心心为100")
+            logging.info(f"✅ 成功重置 {total_users} 个用户: {active_count}个会员重置为100, {inactive_count}个普通用户重置为10")
             return True
             
         except Exception as e:
