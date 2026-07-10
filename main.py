@@ -1287,8 +1287,8 @@ def generate_journal(request: GenerateJournalRequest, user_id: int = Depends(get
         user_emotion = request.emotion or "平和"
         journal_system_prompt = get_journal_generation_prompt(emotion=user_emotion, chat_history=context_summary)
 
-        from llm.llm_factory import chat_with_qwen_llm
-        journal_result = chat_with_qwen_llm(journal_system_prompt)
+        from llm.llm_factory import chat_with_doubao_llm
+        journal_result = chat_with_doubao_llm(journal_system_prompt)
         journal_text = journal_result.get("answer", "今天的心情有点复杂，暂时说不清楚。")
 
         # 入库

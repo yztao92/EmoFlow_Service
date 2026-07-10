@@ -14,7 +14,7 @@
 
 ### **AI模型栈**
 - **Embedding模型**: 千问 `text-embedding-v4` - 文本向量化
-- **LLM模型**: 千问 `qwen-plus` - 对话生成
+- **LLM模型**: 豆包（火山方舟）- 对话生成
 - **向量数据库**: FAISS - 高效相似度检索
 - **元数据库**: SQLite - 存储文档元数据
 
@@ -117,18 +117,22 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ### **环境变量**
 ```bash
 # 必需配置
-QIANWEN_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx  # 千问API密钥
+ARK_API_KEY=xxxxxxxxxxxxxxxxxxxxxxxx          # 火山方舟 API Key
+DOUBAO_MODEL=Doubao-Seed-Character            # 豆包角色扮演模型或推理接入点 ID
+QIANWEN_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx   # 千问 Embedding/图片/语音/检索密钥
 JWT_SECRET_KEY=your_jwt_secret_key_here      # JWT密钥
 
 # 可选配置
+DOUBAO_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+DOUBAO_TIMEOUT=30
 LOG_LEVEL=INFO                                # 日志级别
 DATABASE_URL=sqlite:///database/emoflow.db   # 数据库URL
 ```
 
 ### **API密钥获取**
-1. 访问 [阿里云DashScope控制台](https://dashscope.console.aliyun.com/)
-2. 开通千问服务
-3. 创建API密钥
+1. 访问火山方舟控制台
+2. 开通豆包模型服务
+3. 创建 API Key，并按需创建推理接入点
 4. 将密钥填入 `.env` 文件
 
 ## 📚 API文档
@@ -257,4 +261,4 @@ Content-Type: application/json
 
 ---
 
-**EmoFlow Service** - 让AI更懂你的心 ❤️ 
+**EmoFlow Service** - 让AI更懂你的心 ❤️

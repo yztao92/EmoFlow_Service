@@ -8,11 +8,11 @@ from langchain_core.messages import HumanMessage
 
 # 导入LLM包装器
 from llm.deepseek_wrapper import DeepSeekLLM
-from llm.qwen_llm import QwenLLM
+from llm.doubao_llm import DoubaoLLM
 
 # 全局LLM实例
 _deepseek_llm = None
-_qwen_llm = None
+_doubao_llm = None
 
 def get_deepseek_llm() -> DeepSeekLLM:
     global _deepseek_llm
@@ -20,11 +20,11 @@ def get_deepseek_llm() -> DeepSeekLLM:
         _deepseek_llm = DeepSeekLLM()
     return _deepseek_llm
 
-def get_qwen_llm() -> QwenLLM:
-    global _qwen_llm
-    if _qwen_llm is None:
-        _qwen_llm = QwenLLM()
-    return _qwen_llm
+def get_doubao_llm() -> DoubaoLLM:
+    global _doubao_llm
+    if _doubao_llm is None:
+        _doubao_llm = DoubaoLLM()
+    return _doubao_llm
 
 def _call_to_str(call_fn: Callable[[str], Any], prompt: str) -> str:
     """统一把模型输出转成字符串，避免上游类型不一致"""
@@ -34,14 +34,14 @@ def _call_to_str(call_fn: Callable[[str], Any], prompt: str) -> str:
 # === 生成链路共用：返回【纯字符串】 ===
 def chat_with_llm(prompt: str) -> str:
     """
-    统一的LLM调用接口（默认使用千问LLM）
+    统一的LLM调用接口（默认使用豆包LLM）
     返回：纯字符串
     """
     try:
-        qwen = get_qwen_llm()
-        return _call_to_str(lambda p: qwen._call([HumanMessage(content=p)]), prompt)
+        doubao = get_doubao_llm()
+        return _call_to_str(lambda p: doubao._call([HumanMessage(content=p)]), prompt)
     except Exception as e:
-        logging.error("❌ 千问LLM调用失败：%s", e)
+        logging.error("❌ 豆包LLM调用失败：%s", e)
 
         # 兜底重试 DeepSeek
         try:
@@ -59,7 +59,7 @@ def chat_with_llm_messages(messages: List[Dict[str, str]]) -> str:
     返回：纯字符串
     """
     try:
-        qwen = get_qwen_llm()
+        doubao = get_doubao_llm()
         # 将字典格式转换为LangChain消息格式
         langchain_messages = []
         for msg in messages:
@@ -101,23 +101,27 @@ def chat_with_llm_messages(messages: List[Dict[str, str]]) -> str:
         logging.debug(json.dumps(json_messages, ensure_ascii=False, indent=2))
         logging.debug("=" * 80)
         
-        return _call_to_str(lambda msgs: qwen._call(msgs), langchain_messages)
+        return _call_to_str(lambda msgs: doubao._call(msgs), langchain_messages)
     except Exception as e:
-        logging.error("❌ 千问LLM消息列表调用失败：%s", e)
+        logging.error("❌ 豆包LLM消息列表调用失败：%s", e)
         return "抱歉，我现在无法生成回复，请稍后再试。"
 
 # === 日记模块用：保持【dict】返回，兼容原有调用 ===
-def chat_with_qwen_llm(prompt: str) -> Dict[str, Any]:
+def chat_with_doubao_llm(prompt: str) -> Dict[str, Any]:
     """
-    千问LLM调用接口（返回 dict，包含 answer 字段）
+    豆包LLM调用接口（返回 dict，包含 answer 字段）
     """
     try:
-        qwen = get_qwen_llm()
-        resp = _call_to_str(lambda p: qwen._call([HumanMessage(content=p)]), prompt)
+        doubao = get_doubao_llm()
+        resp = _call_to_str(lambda p: doubao._call([HumanMessage(content=p)]), prompt)
         return {"answer": resp}
     except Exception as e:
-        logging.error("❌ 千问LLM调用失败：%s", e)
+        logging.error("❌ 豆包LLM调用失败：%s", e)
         return {"answer": "抱歉，我现在无法生成回复，请稍后再试。"}
+
+
+# 保留旧函数名，避免外部调用方升级时立即中断。
+chat_with_qwen_llm = chat_with_doubao_llm
 
 def chat_with_deepseek_llm(prompt: str) -> str:
     """
