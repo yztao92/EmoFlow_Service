@@ -3,7 +3,7 @@
 # 实现：使用Pydantic进行数据验证和序列化
 
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 from datetime import date, datetime
 
 # ==================== Pydantic模型 ====================
@@ -96,6 +96,16 @@ class TestLoginRequest(BaseModel):
     """
     username: str  # 测试用户名
     password: str  # 测试密码
+
+class QALoginRequest(BaseModel):
+    """对话质量测试专用登录请求"""
+    username: str
+    password: str
+
+class QAMemoryWriteRequest(BaseModel):
+    """写入 QA 测试用户长期记忆"""
+    memories: List[str]
+    replace: bool = True  # True=先清空再写入，False=追加
 
 class DeleteAccountRequest(BaseModel):
     """

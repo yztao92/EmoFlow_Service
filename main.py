@@ -25,7 +25,7 @@ from dialogue.session_manager import session_manager
 from services.image_service import image_service
 from services.voice_service import voice_service
 from database_models import init_db, SessionLocal, User, Journal, ChatSession, Image
-from database_models.schemas import UpdateProfileRequest, SubscriptionVerifyRequest, SubscriptionStatusResponse, AppleWebhookNotification, TestLoginRequest, DeleteAccountRequest, DeleteAccountResponse
+from database_models.schemas import UpdateProfileRequest, SubscriptionVerifyRequest, SubscriptionStatusResponse, AppleWebhookNotification, TestLoginRequest, QALoginRequest, QAMemoryWriteRequest, DeleteAccountRequest, DeleteAccountResponse
 from subscription.apple_subscription import (
     verify_receipt_with_apple, parse_subscription_info, update_user_subscription, 
     get_user_subscription_status, handle_apple_webhook_notification, AppleSubscriptionError
@@ -38,6 +38,11 @@ load_dotenv()
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-fallback-dev-secret")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_MINUTES = 60 * 24 * 7  # 7天
+
+# ==================== QA 对话质量测试账号 ====================
+QA_TEST_EMAIL = os.getenv("QA_TEST_EMAIL", "qa-test@emoflow.internal")
+QA_TEST_PASSWORD = os.getenv("QA_TEST_PASSWORD", "QaTest2024!")
+QA_TEST_MEMORY_MARKER = "[QA测试记忆]"
 
 # ==================== Apple 登录配置 ====================
 APPLE_PUBLIC_KEYS_URL = "https://appleid.apple.com/auth/keys"
@@ -105,6 +110,8 @@ def reset_all_users_heart():
             active_count = 0
             
             for user in users:
+                if is_qa_test_user(user):
+                    continue
                 if user.subscription_status == "active":
                     user.heart = 100
                     active_count += 1
@@ -449,6 +456,154 @@ def get_current_user(token: str = Header(...)) -> int:
     except Exception:
         raise HTTPException(status_code=401, detail="无效或过期的 Token")
 
+def is_qa_test_user(user: User) -> bool:
+    return user.email == QA_TEST_EMAIL
+
+def get_qa_test_user(user_id: int = Depends(get_current_user)) -> int:
+    db: Session = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if not user or not is_qa_test_user(user):
+            raise HTTPException(status_code=403, detail="仅 QA 测试账号可访问此接口")
+        return user_id
+    finally:
+        db.close()
+
+def _issue_jwt_for_user(user_id: int) -> str:
+    expire = datetime.utcnow() + timedelta(minutes=JWT_EXPIRE_MINUTES)
+    return jwt.encode({"sub": str(user_id), "exp": expire}, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
+
+def _get_or_create_qa_test_user(db: Session) -> User:
+    user = db.query(User).filter(User.email == QA_TEST_EMAIL).first()
+    if not user:
+        user = User(
+            name="QA Test User",
+            email=QA_TEST_EMAIL,
+            heart=999999,
+            subscription_status="inactive",
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        logging.info(f"✅ 创建 QA 测试用户: user_id={user.id}")
+        return user
+
+    user.heart = 999999
+    db.commit()
+    db.refresh(user)
+    logging.info(f"✅ 更新 QA 测试用户: user_id={user.id}")
+    return user
+
+def _clear_qa_user_memories(db: Session, user_id: int) -> int:
+    deleted = db.query(Journal).filter(
+        Journal.user_id == user_id,
+        Journal.content == QA_TEST_MEMORY_MARKER,
+    ).delete(synchronize_session=False)
+    db.commit()
+    return deleted
+
+def _write_qa_user_memories(db: Session, user_id: int, memories: List[str]) -> int:
+    created = 0
+    for memory in memories:
+        memory = memory.strip()
+        if not memory:
+            continue
+        db.add(Journal(
+            user_id=user_id,
+            content=QA_TEST_MEMORY_MARKER,
+            memory_point=memory,
+            emotion="peaceful",
+        ))
+        created += 1
+    db.commit()
+    return created
+
+def _clear_qa_user_sessions(db: Session, user_id: int) -> int:
+    sessions = db.query(ChatSession).filter(
+        ChatSession.user_id == user_id,
+        ChatSession.is_active == True,
+    ).all()
+    for session in sessions:
+        session.is_active = False
+        session_key = f"user_{user_id}_{session.session_id}"
+        if session_key in session_manager.memory_cache:
+            del session_manager.memory_cache[session_key]
+    db.commit()
+    return len(sessions)
+
+# ==================== QA 对话质量测试 ====================
+@app.post("/auth/qa")
+def qa_test_login(request: QALoginRequest):
+    """对话质量测试专用登录，返回无限聊天额度的测试账号 JWT"""
+    if request.username != QA_TEST_EMAIL or request.password != QA_TEST_PASSWORD:
+        raise HTTPException(status_code=401, detail="无效的 QA 测试账号")
+
+    db: Session = SessionLocal()
+    try:
+        user = _get_or_create_qa_test_user(db)
+        jwt_token = _issue_jwt_for_user(user.id)
+        return {
+            "status": "success",
+            "message": "QA 测试登录成功",
+            "jwt": jwt_token,
+            "user": {
+                "id": user.id,
+                "name": user.name,
+                "email": user.email,
+                "heart": user.heart,
+                "unlimited_chat": True,
+            },
+        }
+    finally:
+        db.close()
+
+@app.get("/test/memory")
+def get_qa_test_memories(user_id: int = Depends(get_qa_test_user)) -> Dict[str, Any]:
+    from memory import get_user_latest_memories
+    memories = get_user_latest_memories(user_id, limit=100)
+    return {"status": "success", "count": len(memories), "memories": memories}
+
+@app.put("/test/memory")
+def write_qa_test_memories(
+    request: QAMemoryWriteRequest,
+    user_id: int = Depends(get_qa_test_user),
+) -> Dict[str, Any]:
+    if not request.memories:
+        raise HTTPException(status_code=400, detail="memories 不能为空")
+
+    db: Session = SessionLocal()
+    try:
+        cleared = 0
+        if request.replace:
+            cleared = _clear_qa_user_memories(db, user_id)
+        created = _write_qa_user_memories(db, user_id, request.memories)
+        return {
+            "status": "success",
+            "cleared": cleared,
+            "created": created,
+            "memories": request.memories,
+        }
+    finally:
+        db.close()
+
+@app.delete("/test/memory")
+def clear_qa_test_memories(user_id: int = Depends(get_qa_test_user)) -> Dict[str, Any]:
+    db: Session = SessionLocal()
+    try:
+        deleted = _clear_qa_user_memories(db, user_id)
+        return {"status": "success", "deleted": deleted}
+    finally:
+        db.close()
+
+@app.delete("/test/sessions")
+def clear_qa_test_sessions(user_id: int = Depends(get_qa_test_user)) -> Dict[str, Any]:
+    db: Session = SessionLocal()
+    try:
+        cleared = _clear_qa_user_sessions(db, user_id)
+        return {"status": "success", "cleared": cleared}
+    finally:
+        db.close()
+
 # ==================== 用户资料 ====================
 # 使用database_models.schemas中的UpdateProfileRequest
 
@@ -669,10 +824,11 @@ def chat_with_user(request: ChatRequest, user_id: int = Depends(get_current_user
             user = db.query(User).filter(User.id == user_id).first()
             if not user:
                 raise HTTPException(status_code=404, detail="用户不存在")
-            if user.heart < 1:
-                raise HTTPException(status_code=403, detail="心数不足，无法继续聊天，请等待明天重置或充值")
-            user.heart -= 1
-            db.commit(); db.refresh(user)
+            if not is_qa_test_user(user):
+                if user.heart < 1:
+                    raise HTTPException(status_code=403, detail="心数不足，无法继续聊天，请等待明天重置或充值")
+                user.heart -= 1
+                db.commit(); db.refresh(user)
         except HTTPException:
             raise
         except Exception as e:
